@@ -28,14 +28,6 @@ func TestGlobalNav(t *testing.T) {
 	b.want("dir2/subdir3/index.html", want)
 }
 
-func TestLocalNav(t *testing.T) {
-	b := newBuild(t, navFiles(`{{ if not .IsGlobalNav }}{{ range .LocalNav }}[{{ .Path }}]{{ end }}{{ end }}`))
-	b.compile()
-	b.want("index.html", "")
-	b.want("dir2/index.html", "")
-	b.want("dir2/subdir3/index.html", "[dir2/subdir3/sub]")
-}
-
 func TestBreadcrumb(t *testing.T) {
 	b := newBuild(t, navFiles(`{{ range .Breadcrumb }}[{{ .Path }}]{{ end }}`))
 	b.compile()
@@ -43,13 +35,17 @@ func TestBreadcrumb(t *testing.T) {
 	b.want("dir2/subdir3/sub/index.html", "[dir2][dir2/subdir3][dir2/subdir3/sub]")
 }
 
+// CurrentNav is also how a page reaches the navigation below itself: its
+// Children are the nav directories directly inside it.
 func TestCurrentNav(t *testing.T) {
-	b := newBuild(t, navFiles(`{{ with .CurrentNav }}[{{ .Path }}]{{ end }}`))
+	b := newBuild(t, navFiles(`{{ with .CurrentNav }}[{{ .Path }}({{ range .Children }}{{ .Path }} {{ end }})]{{ end }}`))
 	b.compile()
+	// the site root has no entry of its own, and neither has a directory
+	// outside the navigation
 	b.want("index.html", "")
 	b.want("dir2/subdir3/index.html", "")
-	b.want("dir2/subdir1/index.html", "[dir2/subdir1]")
-	b.want("dir2/subdir2/index.html", "[dir2/subdir2]")
+	b.want("dir2/index.html", "[dir2(dir2/subdir1 dir2/subdir2 )]")
+	b.want("dir2/subdir1/index.html", "[dir2/subdir1()]")
 }
 
 func TestNavActiveAndHref(t *testing.T) {

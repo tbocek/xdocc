@@ -24,6 +24,7 @@ var knownExtensions = map[string]string{
 	"html":     HandlerHTML,
 	"htm":      HandlerHTML,
 	"link":     HandlerLink,
+	"bib":      HandlerBib,
 }
 
 // Handler names.
@@ -31,6 +32,7 @@ const (
 	HandlerMarkdown = "markdown"
 	HandlerHTML     = "html"
 	HandlerLink     = "link"
+	HandlerBib      = "bib"
 	HandlerAsset    = "asset"
 )
 
@@ -84,13 +86,15 @@ func ParseName(raw string) Name {
 		mandatory = n.Base[:firstPipe]
 	}
 
-	rest, ok := n.parseOrder(mandatory)
-	if ok {
+	if rest, ok := n.parseOrder(mandatory); ok && n.parseURL(rest) {
 		n.HasOrder = true
-		n.parseURL(rest)
 	} else {
 		// Not a content item: the whole name is the URL, and it keeps its
-		// extension so it can be copied verbatim.
+		// extension so it can be copied verbatim. "7-.md" lands here too - it
+		// has an order but nothing to publish it under, and a name xdocc cannot
+		// read is a name xdocc leaves alone.
+		n.Date, n.HasDate, n.Order, n.Pinned = time.Time{}, false, 0, false
+		n.Suffix = ""
 		n.URL = raw
 	}
 
@@ -182,21 +186,19 @@ func (n *Name) parseOrder(mandatory string) (string, bool) {
 	return rest[1:], true
 }
 
-// parseURL reads the url, which ends at the first "." or "/", and the
-// "url:title" short form.
-func (n *Name) parseURL(rest string) {
+// parseURL reads the url, which ends at the first "." or "/". It reports
+// whether there was one: an order prefix with no url after it is not a name
+// xdocc takes charge of.
+func (n *Name) parseURL(rest string) bool {
 	if i := strings.IndexAny(rest, "./"); i >= 0 {
 		n.Suffix = rest[i:]
 		rest = rest[:i]
 	}
-	if i := strings.IndexByte(rest, ':'); i >= 0 {
-		n.Title, n.HasTitle = rest[i+1:], true
-		rest = rest[:i]
-	}
 	if rest == "" {
-		rest = IndexURL
+		return false
 	}
 	n.URL = rest
+	return true
 }
 
 // parseTitle reads the display name from "[...]", using the first "[" and the
@@ -241,8 +243,6 @@ func (n *Name) parseProps(firstPipe, firstBracket int) {
 // name it has on disk.
 func (n Name) FileName(transformed bool) string {
 	switch {
-	case transformed && !n.HasOrder: // an unordered file that "visible" pulled in
-		return strings.TrimSuffix(n.Raw, n.Ext) + ".html"
 	case !n.HasOrder:
 		return n.Raw
 	case transformed:

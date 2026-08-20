@@ -44,28 +44,21 @@ func (i *Item) Handler() string {
 	if i.IsDir {
 		return HandlerAsset
 	}
-	if v, ok := i.Props.Bool(PropCopy); ok && v {
-		return HandlerAsset
-	}
 	return i.name.Handler
 }
 
 // IsTransformed reports whether the item is turned into HTML.
 func (i *Item) IsTransformed() bool {
-	return !i.IsDir && i.Handler() != HandlerAsset && i.IsContent()
+	return !i.IsDir && i.isContent() && i.name.Handler != HandlerAsset
 }
 
-// IsContent reports whether xdocc takes charge of the item: only then is it
+// isContent reports whether xdocc takes charge of the item: only then is it
 // transformed, listed and given a clean URL. The order prefix says so, and the
 // root of the site is always content. Without one, a file is passed through
 // untouched, which is what lets a self-contained subtree - a demo, a generated
 // report, someone else's web app - be dropped into the source tree.
-func (i *Item) IsContent() bool {
-	if i.name.HasOrder || (i.IsDir && i.Parent == nil) {
-		return true
-	}
-	v, ok := i.Props.Bool(PropVisible)
-	return ok && v
+func (i *Item) isContent() bool {
+	return i.name.HasOrder || (i.IsDir && i.Parent == nil)
 }
 
 // IsIndex reports whether the item is the page of its own directory. Only an
@@ -78,24 +71,6 @@ func (i *Item) IsNav() bool {
 	return ok && v
 }
 
-// IsPromoted reports whether the directory's items are merged into the parent
-// listing.
-func (i *Item) IsPromoted() bool {
-	v, ok := i.Props.Bool(PropPromote)
-	return ok && v
-}
-
-// PromoteLimit is the number of items a promoted directory contributes, or 0
-// for all of them.
-func (i *Item) PromoteLimit() int {
-	if n, ok := i.Props.Int(PropPromote); ok && n > 0 {
-		return n
-	}
-	return 0
-}
-
-// Split reports whether the item gets a page of its own. Without it, the item
-// only shows up in its directory's index.
 // Split reports whether the item gets a page of its own. On a directory it
 // speaks for the items directly inside it; it is not inherited any deeper, so
 // "nosplit" at the root folds the front page together without touching the
@@ -104,13 +79,10 @@ func (i *Item) Split() bool {
 	if v, ok := i.Props.Bool(PropSplit); ok {
 		return v
 	}
-	return true
-}
-
-// NoIndex reports whether the directory's index.html is suppressed.
-func (i *Item) NoIndex() bool {
-	v, ok := i.Props.Bool(PropNoIndex)
-	return ok && v
+	// A .bib is a list of citations, not a document. It belongs in a listing
+	// and has nothing to put on a page of its own, so it does not ask for one
+	// unless the filename says otherwise.
+	return i.name.Handler != HandlerBib
 }
 
 // Layout is the free-form layout hint handed to templates.
@@ -166,7 +138,7 @@ func (i *Item) Sort() string {
 func (i *Item) ContentItems() []*Item {
 	var items []*Item
 	for _, child := range i.Children {
-		if child.IsContent() && !child.IsIndex() {
+		if child.isContent() && !child.IsIndex() {
 			items = append(items, child)
 		}
 	}
@@ -238,9 +210,6 @@ func (s *Site) walk(dir string, parent *Item) (*Item, error) {
 	item, err := s.newDir(dir, parent)
 	if err != nil {
 		return nil, err
-	}
-	if v, ok := item.Props.Bool(PropHidden); ok && v && parent != nil {
-		return nil, nil
 	}
 	entries, err := os.ReadDir(dir)
 	if err != nil {
@@ -330,7 +299,7 @@ func (s *Site) newDir(dir string, parent *Item) (*Item, error) {
 }
 
 // newFile builds the item for a file, resolving its properties against its
-// front matter and the .xdocc chain. It returns nil for files that are hidden.
+// front matter and the .xdocc chain. It returns nil for files that are skipped.
 func (s *Site) newFile(file string, parent *Item) (*Item, error) {
 	info, err := os.Stat(file)
 	if err != nil {
@@ -350,33 +319,32 @@ func (s *Site) newFile(file string, parent *Item) (*Item, error) {
 	item.Props.merge(item.name.Props, false)
 
 	// Front matter is only read from files that are turned into HTML, and the
-	// cache spares us even that when the file has not changed.
-	switch item.name.Handler {
-	case HandlerMarkdown, HandlerHTML, HandlerLink:
-		rel := filepath.ToSlash(item.Rel)
-		s.alive[rel] = true
-		data, err := os.ReadFile(file)
-		if err != nil {
-			return nil, err
-		}
-		entry, ok := s.cache.lookup(rel, data)
-		if !ok {
-			front, body, err := SplitFrontmatter(data)
+	// cache spares us even that when the file has not changed. A file without
+	// an order prefix is passed through untouched, so it is never opened.
+	if item.name.HasOrder {
+		switch item.name.Handler {
+		case HandlerMarkdown, HandlerHTML, HandlerLink, HandlerBib:
+			rel := filepath.ToSlash(item.Rel)
+			s.alive[rel] = true
+			data, err := os.ReadFile(file)
 			if err != nil {
 				return nil, err
 			}
-			entry = &CacheEntry{Hash: sha256.Sum256(data), Front: front}
-			s.cache.put(rel, entry)
-			item.body = body
+			entry, ok := s.cache.lookup(rel, data)
+			if !ok {
+				front, body, err := SplitFrontmatter(data)
+				if err != nil {
+					return nil, err
+				}
+				entry = &CacheEntry{Hash: sha256.Sum256(data), Front: front}
+				s.cache.put(rel, entry)
+				item.body = body
+			}
+			item.cache = entry
+			item.Props.merge(entry.Front, false)
 		}
-		item.cache = entry
-		item.Props.merge(entry.Front, false)
 	}
 	item.Props.merge(parent.settings, true)
-
-	if v, ok := item.Props.Bool(PropHidden); ok && v {
-		return nil, nil
-	}
 
 	item.Name = item.name.Title
 	if title, ok := item.Props[PropName]; ok && title != "" {
@@ -386,13 +354,6 @@ func (s *Site) newFile(file string, parent *Item) (*Item, error) {
 	item.URL = parent.Dir + item.name.FileName(item.IsTransformed())
 	item.Nr = item.name.Order
 	item.Date = item.name.Date
-	if value, ok := item.Props[PropDate]; ok {
-		if date, ok := ParseDate(value); ok {
-			item.Date = date
-			item.Nr = date.UnixMilli()
-			item.name.HasDate = true
-		}
-	}
 	return item, nil
 }
 

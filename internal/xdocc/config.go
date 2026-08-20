@@ -145,18 +145,3 @@ func isFence(line string) bool {
 	}
 	return strings.Trim(line, "-") == ""
 }
-
-// ParseDate reads a date property, accepting the spellings that show up in
-// front matter.
-func ParseDate(value string) (time.Time, bool) {
-	value = strings.TrimSpace(value)
-	for _, layout := range []string{
-		"2006-01-02_15:04:05", "2006-01-02 15:04:05", time.RFC3339,
-		"2006-01-02T15:04:05", "2006-01-02", "02.01.2006",
-	} {
-		if t, err := time.ParseInLocation(layout, value, time.Local); err == nil {
-			return t, true
-		}
-	}
-	return time.Time{}, false
-}

@@ -4,7 +4,6 @@ import (
 	"context"
 	"log"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"strings"
 	"time"
@@ -15,27 +14,6 @@ import (
 // debounce is how long the watcher waits for the file system to settle before
 // it recompiles. Editors write in bursts.
 const debounce = 200 * time.Millisecond
-
-// Build compiles the site once and runs the post-processing command.
-func (s *Site) Build() (int, error) {
-	written, err := s.Compile()
-	if err != nil {
-		return written, err
-	}
-	return written, s.postProcess()
-}
-
-// postProcess runs the site's post-processing command in the output directory.
-func (s *Site) postProcess() error {
-	command := s.PostProcessing()
-	if command == "" {
-		return nil
-	}
-	cmd := exec.Command("sh", "-c", command)
-	cmd.Dir = s.Gen
-	cmd.Stdout, cmd.Stderr = os.Stdout, os.Stderr
-	return cmd.Run()
-}
 
 // Watch compiles the site and then recompiles it whenever the source changes.
 // It returns when the context is cancelled.
@@ -49,7 +27,7 @@ func (s *Site) Watch(ctx context.Context) error {
 		return err
 	}
 
-	if written, err := s.Build(); err != nil {
+	if written, err := s.Compile(); err != nil {
 		log.Printf("xdocc: %v", err)
 	} else {
 		log.Printf("xdocc: %d files written", written)
@@ -88,7 +66,7 @@ func (s *Site) Watch(ctx context.Context) error {
 			log.Printf("xdocc: watch: %v", err)
 		case <-timer.C:
 			start := time.Now()
-			written, err := s.Build()
+			written, err := s.Compile()
 			if err != nil {
 				log.Printf("xdocc: %v", err)
 				continue

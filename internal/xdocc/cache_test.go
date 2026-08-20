@@ -24,42 +24,8 @@ func warm(t *testing.T, files map[string]string) (*build, func()) {
 // visible and not just a stale link.
 const contentListing = `{{ range .Items }}[{{ .URL }}:{{ .Content }}]{{ end }}`
 
-func TestCacheInvalidatesPromotingParent(t *testing.T) {
-	b, run := warm(t, map[string]string{
-		".templates/page.html":     `{{ .Content }}`,
-		".templates/list.html":     contentListing,
-		".templates/markdown.html": `{{ .Content }}`,
-		"1-featured|prm/1-a.md":    "one",
-		"2-b.md":                   "two",
-	})
-	run()
-	b.want("index.html", "[featured/a.html:<p>one</p>][b.html:<p>two</p>]")
-
-	// the promoted file changes: the parent listing has to follow, although
-	// nothing in the parent directory was touched
-	b.file("1-featured|prm/1-a.md", "one changed")
-	run()
-	b.want("index.html", "[featured/a.html:<p>one changed</p>][b.html:<p>two</p>]")
-	b.want("featured/index.html", "[featured/a.html:<p>one changed</p>]")
-	b.want("featured/a.html", "<p>one changed</p>")
-
-	// a file appearing in the promoted directory shows up in the parent
-	b.file("1-featured|prm/2-c.md", "three")
-	run()
-	b.want("index.html", "[featured/a.html:<p>one changed</p>][b.html:<p>two</p>][featured/c.html:<p>three</p>]")
-
-	// and disappears again with the file
-	b.remove("1-featured|prm/2-c.md")
-	run()
-	b.want("index.html", "[featured/a.html:<p>one changed</p>][b.html:<p>two</p>]")
-	if b.exists("featured/c.html") {
-		t.Error("featured/c.html survived the removal of its source")
-	}
-	if _, ok := b.cache.Entries["1-featured|prm/2-c.md"]; ok {
-		t.Error("the cache still holds an entry for the removed file")
-	}
-}
-
+// A .link pulls items out of another directory, so a page can go stale because
+// of a file it does not contain. Nothing about that is cached.
 func TestCacheInvalidatesLinkSource(t *testing.T) {
 	b, run := warm(t, map[string]string{
 		".templates/page.html":     `{{ .Content }}`,
@@ -83,6 +49,17 @@ func TestCacheInvalidatesLinkSource(t *testing.T) {
 	b.file("2-news/2-b.md", "two")
 	run()
 	b.want("index.html", "[pull.html:<p>one changed</p><p>two</p>]"+dir)
+
+	// and leaves it again with the file, which also drops out of the cache
+	b.remove("2-news/2-b.md")
+	run()
+	b.want("index.html", "[pull.html:<p>one changed</p>]"+dir)
+	if b.exists("news/b.html") {
+		t.Error("news/b.html survived the removal of its source")
+	}
+	if _, ok := b.cache.Entries["2-news/2-b.md"]; ok {
+		t.Error("the cache still holds an entry for the removed file")
+	}
 }
 
 func TestCacheInvalidatesOnXdoccChange(t *testing.T) {
@@ -101,9 +78,7 @@ func TestCacheInvalidatesOnXdoccChange(t *testing.T) {
 	run()
 	b.want("index.html", "[b.html][a.html]")
 
-	// hiding one item, again without touching any markdown
-	b.file(".xdocc", "sort: desc\n")
-	b.file("2-b|hidden.md", "two")
+	// removing one item, again without touching the markdown that stays
 	b.remove("2-b.md")
 	run()
 	b.want("index.html", "[a.html]")

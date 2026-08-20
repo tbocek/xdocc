@@ -36,20 +36,24 @@ xdocc -s ./site -o ./www -w       # keep running and recompile on every change
   extension has a handler, listed in its directory's index, and published under a clean
   URL (`about.html`).
 - **`hash.html`** — no order prefix: xdocc passes it through byte for byte, whatever its
-  extension, and does not list it. A directory without an order prefix is passed through
-  the same way and gets no generated index.
+  extension, and does not list it. A directory without an order prefix keeps its name,
+  is not listed, and gets no generated index.
 
 That second rule is what lets a self-contained thing — a demo, a generated report,
 someone else's web app with its own `<head>`, its own CSS and its own `index.html` — be
 dropped into the source tree and come out unharmed.
 
+The rule is asked of **every name on its own**, and a directory does not answer for the
+files inside it. So `demo/hash.html` is passed through, while `demo/1-a.md` in the same
+directory still becomes `demo/a.html` — a directory with no order prefix is a place that
+holds pages without being part of the structure.
+
 | | how it's recognised | what happens |
 |---|---|---|
 | **content** | `1-about.md` | `about.html`, listed in the index |
 | **content, no handler** | `1-photo.jpg` | `photo.jpg`, listed in the index |
-| **passed through** | `logo.svg`, `notes.md`, `demo/` | copied verbatim, not listed |
-| **pulled back in** | `notes.md` under `visible` | `notes.html`, listed last |
-| **hidden** | `.draft.md`, `notes.md~`, `1-a\|hidden.md` | not in the output at all |
+| **passed through** | `logo.svg`, `notes.md`, `demo/` | byte for byte, not listed |
+| **hidden** | `.draft.md`, `.old-dir/`, `notes.md~`, `notes.md.bak` | not in the output at all |
 
 ```
 site/                            www/
@@ -60,9 +64,9 @@ site/                            www/
 ├── 1-intro.md            ────►  ├── intro.html
 ├── 2-about[About]nav/    ────►  ├── about/
 │   ├── 1-team.md         ────►  │   ├── team.html
-│   └── photo.jpg         ────►  │   └── photo.jpg      (copied)
-├── logo.svg              ────►  ├── logo.svg           (copied)
-├── demo/                 ────►  ├── demo/              (copied, no index added)
+│   └── photo.jpg         ────►  │   └── photo.jpg      (as is)
+├── logo.svg              ────►  ├── logo.svg           (as is)
+├── demo/                 ────►  ├── demo/              (as is, no index added)
 │   └── index.html        ────►  │   └── index.html
                                  └── index.html         (listing of intro + about)
 ```
@@ -117,7 +121,7 @@ two columns here:
 | `2024-01-01-launch.md` | content, dated |
 | `2024-01-01.md` | no order prefix: `2024-01-01.html`, not listed |
 | `2024-launch.md` | content, order 2024 — `2024` is read as a number |
-| `label-1.jpg` | no order prefix: copied as `label-1.jpg` |
+| `label-1.jpg` | no order prefix: passed through as `label-1.jpg` |
 
 Directories work the same way: `3-news[News]nav/` is third in order, published at
 `news/`, titled "News", and shown in the navigation.
@@ -128,20 +132,23 @@ The text between the `-` and the first `.` or `|` becomes the output filename:
 `1-about.md` → `about.html`. Nested directories nest the URL:
 `2-docs/1-intro.md` → `docs/intro.html`.
 
-An **empty URL means `index`**, so `7-.md` produces `index.html`, and so does
-`1-index.md`: an item whose URL is `index` becomes the page of its directory and
-**replaces the generated listing**. It is written even when splitting is off, because
-it *is* the directory's page. A plain `index.md` has no order prefix, so xdocc leaves
-it alone — it is copied, and the web server serves it as the directory page by itself.
+An item whose URL is **`index`** becomes the page of its directory and **replaces the
+generated listing** — `1-index.md`, or `2025-02-17-index[FS25].md`. It is written even
+when splitting is off, because it *is* the directory's page. A plain `index.md` has no
+order prefix, so xdocc leaves it alone — it is passed through, and the web server serves
+it as the directory page by itself.
+
+An order prefix with nothing after it — `7-.md` — has no URL to be published under, and
+a name xdocc cannot read is a name it leaves alone: the file is passed through as
+`7-.md`.
 
 ### Display name
 
-Three equivalent ways to title an item "About us":
+Two equivalent ways to title an item "About us":
 
 ```
 1-about[About us].md
 1-about|name=About us.md
-1-about:About us.md
 ```
 
 Without one, the name is the URL. A `name:` key in the front matter also works, and
@@ -177,7 +184,7 @@ but because it is the last one in the chain.
 
 ```yaml
 # site/.xdocc — applies to the whole site
-symlink: true
+symlink: false
 layout: default
 ```
 
@@ -189,8 +196,8 @@ nosplit
 nav|layout=wide
 ```
 
-Five properties **never inherit**, because inheriting them is never what you mean:
-`nav`, `name`, `noindex`, `promote` and `split`. They describe one item. A `.xdocc` may
+Three properties **never inherit**, because inheriting them is never what you mean:
+`nav`, `name` and `split`. They describe one item. A `.xdocc` may
 still set them — it then describes *its own* directory, not the ones below it:
 
 ```
@@ -206,15 +213,15 @@ or more dashes:
 ```markdown
 ---
 name: Challenge Task Winner FS25
-date: 2025-06-02
 layout: wide
 ---
 #### ${name}
 (${date}) Congratulations to the winners …
 ```
 
-Any property may be set here. `date` overrides the date parsed from the filename, and
-with it the sort key.
+Any property may be set here, and keys xdocc does not know are handed to templates as
+`.Props`. The date is not among them: it comes from the filename, which is the one
+place it decides the sort order as well.
 
 ---
 
@@ -226,8 +233,6 @@ with it the sort key.
 |---|---|---|---|
 | `nav` | flag | directory | include in the navigation tree |
 | `name` | text | any | display name |
-| `noindex` | flag | directory | do not write an `index.html` here |
-| `promote` | flag or a number | directory | merge this directory's items into the parent's listing; `promote=1` merges only the first |
 | `split` | bool, default `true` | directory or item | `false`: no page of its own — the item appears only inside its directory's `index.html`. On a directory it speaks for the items directly inside it and reaches no deeper, so `nosplit` in the root `.xdocc` folds the front page together without flattening the sections below it |
 
 ### Settings — inherited down the tree
@@ -236,33 +241,60 @@ with it the sort key.
 |---|---|---|---|
 | `layout` | text | — | free-form string handed to templates as `.Layout`; templates decide what it means |
 | `sort` | `auto`, `asc`, `desc` | `auto` | `auto` sorts dated items newest first and numbered items ascending |
-| `hidden` | bool | `false` | keep out of the output entirely |
-| `visible` | bool | `false` | list items *without* an order prefix too; they sort last, by filename |
-| `copy` | bool | `false` | never transform — copy even if a handler exists |
-| `date` | date | — | usually set in front matter; overrides the date in the filename |
 
 ### Site settings — root `.xdocc`
 
-| Property | Value | Meaning |
-|---|---|---|
-| `symlink` | bool | symlink assets into the output instead of copying them |
-| `post-processing` | command | run with `sh -c` in the output directory after a successful build |
+| Property | Value | Default | Meaning |
+|---|---|---|---|
+| `symlink` | bool | `true` | symlink assets into the output instead of copying them |
+
+Assets are symlinked by default. A site whose weight is in its files — a lecture
+folder full of video, a directory of PDFs — is then generated in milliseconds and
+takes no second copy of the disk. Set `symlink: false` in the root `.xdocc` if the
+output is handed to something that cannot follow a link pointing out of the output
+tree. Where the file system has no symlinks at all, xdocc says so once and copies
+instead, so this is a preference and not a promise.
 
 ### Legacy spellings
 
-Still accepted, so existing trees keep working:
+One property, one word, with three short forms kept because they read better than
+what they stand for:
 
-`nosplit`, `page`, `pag` → `split=false` · `hid`, `hide` → `hidden` · `vis` → `visible` ·
-`cp` → `copy` · `nidx` → `noindex` · `prm` → `promote` · `prm1`, `promote1` →
-`promote=1` · `n` → `name` · `l` → `layout` · `asc`, `desc`, `dsc` → `sort=…` ·
-`pp` → `post-processing`
+`nosplit`, `page` → `split=false` · `l` → `layout` · `asc`, `desc` → `sort=…`
 
-Properties of the Java version that no longer exist — `content`, `paging`, `crop`,
-`dir-command`, `command-odt` and friends — are accepted and ignored.
+Everything else that used to be a property is accepted and ignored, so an old tree
+still compiles:
+
+| Gone | Say this instead |
+|---|---|
+| `hidden`, `hide`, `hid` | a leading dot: `.draft.md`, `.old-dir/` |
+| `copy`, `cp` | leave the order prefix off — that is what "do not transform" means now |
+| `visible`, `vis` | give the file an order prefix |
+| `promote`, `prm`, `prm1` | a `.link` file, which pulls from anywhere and not just from a child |
+| `date` in front matter | the date in the filename |
+| `post-processing`, `pp` | whatever starts xdocc: `ExecStartPost=`, a wrapper script, a `Makefile` |
+| `noindex`, `nidx` | leave the order prefix off the directory: it then has pages and no listing, and nothing links to a page that is not there |
+| `n`, `pag`, `dsc` | the words they abbreviated: `name`, `nosplit`, `desc` |
+| `content`, `paging`, `crop`, `dir-command`, `command-odt` … | — |
 
 ---
 
-## 5. Splitting
+## 5. What a directory writes
+
+A directory with an order prefix writes two things: a **listing** (`index.html`) and a
+**page for each item** in it. Everything below is one of those two being turned off.
+
+| | listing | pages |
+|---|---|---|
+| `3-news/` | generated | yes |
+| `3-news/` containing `1-index.md` | **that file, instead of the generated one** | yes |
+| `3-news\|nosplit/` | generated | no |
+| `news/` — no order prefix | none | yes — each name inside is still judged on its own |
+
+Reach for `1-index.md` first: writing the directory's page yourself is what people
+usually mean, and it is the one that leaves the items reachable.
+
+### Splitting
 
 By default each content item becomes its own page **and** appears in its directory's
 `index.html`:
@@ -279,7 +311,10 @@ directories below it, so `nosplit` in the root `.xdocc` gives you a front page t
 one long scroll while the sections keep their own pages.
 
 `split` also works on a single item — `0-title|nosplit.md` contributes to the index but
-gets no page of its own. Templates should link to items with `.Link`, which points at
+gets no page of its own. A `.bib` never splits unless you ask it to with `|split`: a
+list of citations belongs in a listing and has no page to be. So a directory of
+`2006-pub[2006].bib` … `2024-pub[2024].bib` is one publication page, one heading per
+year. Templates should link to items with `.Link`, which points at
 the item's own page when it has one and at its directory's index when it has not.
 
 ---
@@ -317,26 +352,17 @@ inside that; a `sort` property on the `.link` file re-sorts everything it pulled
 
 ---
 
-## 7. Navigation and promotion
+## 7. Navigation
 
 **Navigation** is built from directories marked `nav`, recursively — a directory that
 is not in the navigation also keeps its children out of it. Templates get `.GlobalNav`
-(the tree from the site root), `.LocalNav` (the tree below the current directory),
-`.CurrentNav` (the entry of the current directory, if it is in the navigation),
-`.Breadcrumb` (every directory from the site root down to this one) and
-`.IsGlobalNav` (whether the current directory is reachable in the global tree).
+(the tree from the site root), `.CurrentNav` (the entry of the current directory, if it
+is in the navigation, whose `.Children` are the navigation below it) and `.Breadcrumb`
+(every directory from the site root down to this one).
 
-**Promotion** lifts a subdirectory's items into its parent's listing:
-
-```
-site/
-├── 2-item2.md
-└── 1-featured|promote/
-    └── 1-item1.md          ──►  index.html contains item1, item2
-```
-
-Without `promote`, a subdirectory appears in its parent's listing as a single entry
-that links to it, and is compiled independently.
+A subdirectory appears in its parent's listing as a single entry that links to it, and
+is compiled independently. To lift its items into another page instead, use a `.link`
+file (section 6).
 
 ---
 
@@ -353,8 +379,8 @@ with `{{ template "name.html" . }}`.
 | `markdown.html` | one markdown item |
 | `html.html` | one HTML item |
 | `link.html` | the result of a `.link` file |
-| `file.html` | one asset shown in a listing |
-| `directory.html` | one subdirectory shown in a listing |
+| `bib.html` | the citations of a `.bib` file |
+| `file.html` | one asset or subdirectory shown in a listing — anything a listing links to rather than shows |
 | `nav.html` | a navigation tree, called with a list of navigation entries |
 
 Available in every template:
@@ -363,9 +389,9 @@ Available in every template:
 |---|---|
 | item | `.Name` `.URL` `.Link` `.Content` `.Date` `.Nr` `.Layout` `.Props` `.FileName` `.FileSize` `.Ext` `.Depth` |
 | listing | `.Items` `.ItemsByURL` |
-| navigation | `.GlobalNav` `.LocalNav` `.CurrentNav` `.Breadcrumb` `.IsGlobalNav` |
+| navigation | `.GlobalNav` `.CurrentNav` `.Breadcrumb` |
 | paths | `.Root` — the way back to the site root from the page being rendered, `""` or `"../../"` |
-| flags | `.IsDir` `.IsContent` `.IsIndex` `.IsNav` `.IsPromoted` `.IsTransformed` `.Split` |
+| flags | `.IsDir` `.IsIndex` `.IsNav` `.IsTransformed` `.Split` |
 
 `.URL` is the file an item produces, relative to the site root (`docs/about.html`);
 `.Link` is where to link to it, which differs only for items that do not split. Write
@@ -412,7 +438,8 @@ resolves against its own name and its own location.
 | `.md`, `.markdown` | markdown → HTML, by [goldmark](https://github.com/yuin/goldmark): CommonMark plus GFM (tables, strikethrough, autolinks, task lists), footnotes, definition lists, automatic heading anchors, and inline HTML passed through |
 | `.html`, `.htm` | HTML; the content of `<body>` if there is one |
 | `.link` | content pulled from elsewhere (see above) |
-| anything else | asset: copied, or symlinked when `symlink` is set |
+| `.bib` | BibTeX → one `<div class="citation">` per entry, in file order |
+| anything else | asset: symlinked into the output, or copied — see `symlink` |
 
 The rightmost extension picks the handler, and known extensions stack:
 `1-recipe.link.md` is markdown.
@@ -441,12 +468,12 @@ hashing it is cheap next to rendering it.
 ### What is never cached
 
 Everything that depends on more than one file is recomputed on every run: the listing
-of a directory, the items promoted into it, `.link` results, the navigation tree, the
-breadcrumb, `${...}` substitution, and every template. **A promoted subdirectory cannot
-go stale in its parent**: the parent's listing is rebuilt from the current item tree
-every time, and only the unchanged children inside it are served from the cache. The
-same holds for a `.link` file whose target changed, for a `.xdocc` that changed the
-sort order, and for a template change, which reaches every page.
+of a directory, `.link` results, the navigation tree, the breadcrumb, `${...}`
+substitution, and every template. **A page cannot go stale because of a file it does
+not contain**: every listing is rebuilt from the current item tree, and only the
+unchanged items inside it are served from the cache. That covers a `.link` whose target
+changed, a `.xdocc` that changed the sort order, and a template change, which reaches
+every page.
 
 The tests in `internal/xdocc/cache_test.go` compile each of these cases twice with a
 cache file reopened from disk in between.
@@ -488,9 +515,9 @@ journalctl -u xdocc -f
 `CacheDirectory=xdocc` gives the service `/var/cache/xdocc` and passes it in
 `$CACHE_DIRECTORY`, so a restart is not a full rebuild. The unit runs unprivileged and
 hardened (`ProtectSystem=strict`, `NoNewPrivileges`, an empty capability set, and the
-output directory as the only writable path). If the root `.xdocc` sets
-`post-processing`, that command runs under the same restrictions — give it its own
-`ReadWritePaths` or relax `ProtectSystem`.
+output directory as the only writable path). To publish after every build, add an
+`ExecStartPost=` of your own or let the output directory be what the web server
+serves.
 
 ---
 

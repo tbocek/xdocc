@@ -176,14 +176,16 @@ func TestCompileIndexItem(t *testing.T) {
 	if b.exists("index.html") && b.read("index.html") == "" {
 		t.Error("index.html is empty")
 	}
-	// "7-.md" means the same thing
+	// an order with no url after it - "7-.md" - is not a name xdocc reads, so
+	// the file is passed through and the listing is generated as usual
 	b2 := newBuild(t, map[string]string{
-		".templates/page.html":     `[{{ .Content }}]`,
-		".templates/markdown.html": `{{ .Content }}`,
-		"7-.md":                    "empty url",
+		".templates/page.html": `[{{ .Content }}]`,
+		".templates/list.html": listTemplate,
+		"7-.md":                "empty url",
 	})
 	b2.compile()
-	b2.want("index.html", "[<p>empty url</p>]")
+	b2.want("7-.md", "empty url")
+	b2.want("index.html", "[]")
 }
 
 func TestCompileSplit(t *testing.T) {
@@ -217,56 +219,22 @@ func TestCompileSplit(t *testing.T) {
 	b2.want("index.html", "[a.html][b.html]")
 }
 
-func TestCompileNoIndex(t *testing.T) {
-	b := newBuild(t, map[string]string{
-		".templates/page.html": `{{ .Content }}`,
-		"1-dir|nidx/1-a.md":    "a",
-	})
-	b.compile()
-	if b.exists("dir/index.html") {
-		t.Error("dir/index.html was written although noindex is set")
-	}
-	if !b.exists("dir/a.html") {
-		t.Error("dir/a.html is missing")
-	}
-}
-
-func TestCompilePromote(t *testing.T) {
-	b := newBuild(t, map[string]string{
-		".templates/page.html":      `{{ .Content }}`,
-		".templates/list.html":      listTemplate,
-		"2-item2.md":                "two",
-		"1-featured|prm/1-item1.md": "one",
-	})
-	b.compile()
-	b.want("index.html", "[featured/item1.html][item2.html]")
-	// the promoted directory is still compiled on its own
-	b.want("featured/index.html", "[featured/item1.html]")
-
-	// promote=1 contributes only the first item
-	b2 := newBuild(t, map[string]string{
-		".templates/page.html":       `{{ .Content }}`,
-		".templates/list.html":       listTemplate,
-		"1-featured|prm1/1-item1.md": "one",
-		"1-featured|prm1/2-item2.md": "two",
-	})
-	b2.compile()
-	b2.want("index.html", "[featured/item1.html]")
-}
-
 func TestCompileHiddenAndFrontmatter(t *testing.T) {
 	b := newBuild(t, map[string]string{
 		".templates/page.html": `{{ .Content }}`,
 		".templates/list.html": `{{ range .Items }}[{{ .Name }}|{{ date "2006-01-02" .Date }}]{{ end }}`,
-		"1-a.md":               "---\nname: From front matter\ndate: 2025-06-02\n---\ntext\n",
-		"2-b|hidden.md":        "invisible",
+		"2025-06-02-a.md":      "---\nname: From front matter\n---\ntext\n",
 		".hidden.md":           "invisible",
+		"1-b.md~":              "invisible",
+		"2-c.bak":              "invisible",
 		"3-c[From name].md":    "c",
 	})
 	b.compile()
 	b.want("index.html", "[From front matter|2025-06-02][From name|0001-01-01]")
-	if b.exists("b.html") {
-		t.Error("hidden item was written")
+	for _, name := range []string{"b.html", "hidden.html", ".hidden.md", "1-b.md~", "2-c.bak"} {
+		if b.exists(name) {
+			t.Errorf("%s reached the output", name)
+		}
 	}
 }
 
@@ -299,24 +267,6 @@ func TestCompileDeleteStaleOutput(t *testing.T) {
 	}
 }
 
-func TestCompileSymlink(t *testing.T) {
-	b := newBuild(t, map[string]string{
-		".templates/page.html": `{{ .Content }}`,
-		".xdocc":               "symlink\n",
-		"logo.svg":             "<svg/>",
-	})
-	b.compile()
-	target := filepath.Join(b.gen, "logo.svg")
-	info, err := os.Lstat(target)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if info.Mode()&os.ModeSymlink == 0 {
-		t.Errorf("logo.svg is not a symlink")
-	}
-	b.want("logo.svg", "<svg/>")
-}
-
 func TestCompileCacheReusesRenderedContent(t *testing.T) {
 	b := newBuild(t, map[string]string{
 		".templates/page.html": `{{ .Content }}`,
@@ -337,46 +287,53 @@ func TestCompileCacheReusesRenderedContent(t *testing.T) {
 
 func TestCompileHiddenDirectory(t *testing.T) {
 	b := newBuild(t, map[string]string{
-		".templates/page.html":  `{{ .Content }}`,
-		".templates/list.html":  listTemplate,
-		"1-a.md":                "a",
-		"2-draft|hidden/1-b.md": "b",
-		"3-also/.xdocc":         "hidden\n",
-		"3-also/1-c.md":         "c",
+		".templates/page.html": `{{ .Content }}`,
+		".templates/list.html": listTemplate,
+		"1-a.md":               "a",
+		".draft/1-b.md":        "b",
+		"2-also~/1-c.md":       "c",
 	})
 	b.compile()
 	b.want("index.html", "[a.html]")
-	if b.exists("draft") || b.exists("also") {
-		t.Error("a hidden directory reached the output")
+	for _, name := range []string{".draft", "draft", "2-also~", "also"} {
+		if b.exists(name) {
+			t.Errorf("%s reached the output", name)
+		}
 	}
 }
 
-func TestCompileVisible(t *testing.T) {
+// "visible", "copy" and "promote" are what the order prefix says now. Trees
+// that still spell them must keep compiling, with the prefix having the last
+// word.
+func TestCompileLegacyPropertiesAreIgnored(t *testing.T) {
 	b := newBuild(t, map[string]string{
-		".templates/page.html": `{{ .Content }}`,
-		".templates/list.html": listTemplate,
-		".xdocc":               "visible\n",
-		"1-ordered.md":         "ordered",
-		"beta.md":              "beta",
-		"alpha.md":             "alpha",
+		".templates/page.html":    `{{ .Content }}`,
+		".templates/list.html":    listTemplate,
+		".xdocc":                  "visible\n",
+		"0-shown|hidden.md":       "still here",
+		"1-raw|copy.md":           "# converted after all",
+		"2-normal.md":             "# converted",
+		"3-featured|prm/1-one.md": "one",
+		"4-plain|noindex/1-p.md":  "p",
+		"alpha.md":                "alpha",
 	})
 	b.compile()
-	// items without an order prefix are listed too, last and by filename
-	b.want("index.html", "[ordered.html][alpha.html][beta.html]")
-	b.want("alpha.html", "<p>alpha</p>")
-}
-
-func TestCompileCopyProperty(t *testing.T) {
-	b := newBuild(t, map[string]string{
-		".templates/page.html": `{{ .Content }}`,
-		".templates/list.html": listTemplate,
-		"1-raw|copy.md":        "# not converted",
-		"2-normal.md":          "# converted",
-	})
-	b.compile()
-	b.want("raw.md", "# not converted")
+	// "copy" no longer holds a file back from its handler
+	b.want("raw.html", "<h1 id=\"converted-after-all\">converted after all</h1>")
 	b.want("normal.html", "<h1 id=\"converted\">converted</h1>")
-	b.want("index.html", "[raw.md][normal.html]")
+	// "visible" no longer pulls in a file without an order prefix
+	b.want("alpha.md", "alpha")
+	if b.exists("alpha.html") {
+		t.Error("alpha.html was written although alpha.md has no order prefix")
+	}
+	// "hidden" is what a leading dot says now
+	b.want("shown.html", "<p>still here</p>")
+	// "promote" no longer merges a directory into its parent
+	b.want("index.html", "[shown.html][raw.html][normal.html][featured/index.html][plain/index.html]")
+	b.want("featured/index.html", "[featured/one.html]")
+	// "noindex" no longer holds back a listing, which is what kept the entry
+	// above from pointing at a page that was never written
+	b.want("plain/index.html", "[plain/p.html]")
 }
 
 func TestCompileHTMLHandler(t *testing.T) {
@@ -457,4 +414,73 @@ func TestCompileIndexItemInPassthroughDir(t *testing.T) {
 	b.want("fs25/slides.pdf", "%PDF")
 	// the directory is still not part of the site's own structure
 	b.want("index.html", "[[a.html]]")
+}
+
+// Symlinking is the default, so a tree whose weight is in its files costs
+// almost nothing to generate. Only the root .xdocc turns it off.
+func TestCompileSymlinkIsTheDefault(t *testing.T) {
+	b := newBuild(t, map[string]string{
+		".templates/page.html": `{{ .Content }}`,
+		"1-a.md":               "a",
+		"logo.svg":             "<svg/>",
+	})
+	b.compile()
+	link, err := os.Readlink(filepath.Join(b.gen, "logo.svg"))
+	if err != nil {
+		t.Fatalf("logo.svg is not a symlink: %v", err)
+	}
+	if want := filepath.Join(b.src, "logo.svg"); link != want {
+		t.Errorf("logo.svg points at %q, want %q", link, want)
+	}
+	// it still reads as the file it points at
+	b.want("logo.svg", "<svg/>")
+	// a generated page is a real file, never a link
+	if info, err := os.Lstat(filepath.Join(b.gen, "a.html")); err != nil {
+		t.Fatal(err)
+	} else if !info.Mode().IsRegular() {
+		t.Errorf("a.html is not a regular file: %v", info.Mode())
+	}
+}
+
+func TestCompileSymlinkOff(t *testing.T) {
+	b := newBuild(t, map[string]string{
+		".templates/page.html": `{{ .Content }}`,
+		".xdocc":               "symlink: false\n",
+		"logo.svg":             "<svg/>",
+	})
+	b.compile()
+	info, err := os.Lstat(filepath.Join(b.gen, "logo.svg"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !info.Mode().IsRegular() {
+		t.Errorf("logo.svg is not a copy: %v", info.Mode())
+	}
+	b.want("logo.svg", "<svg/>")
+}
+
+// Switching the setting has to replace what the previous run left behind,
+// in both directions.
+func TestCompileSymlinkSwitchesBothWays(t *testing.T) {
+	b := newBuild(t, map[string]string{
+		".templates/page.html": `{{ .Content }}`,
+		".xdocc":               "symlink: false\n",
+		"logo.svg":             "<svg/>",
+	})
+	b.compile()
+	b.file(".xdocc", "symlink\n")
+	b.compile()
+	if _, err := os.Readlink(filepath.Join(b.gen, "logo.svg")); err != nil {
+		t.Fatalf("the copy was not replaced by a symlink: %v", err)
+	}
+	b.file(".xdocc", "symlink: false\n")
+	b.compile()
+	info, err := os.Lstat(filepath.Join(b.gen, "logo.svg"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !info.Mode().IsRegular() {
+		t.Errorf("the symlink was not replaced by a copy: %v", info.Mode())
+	}
+	b.want("logo.svg", "<svg/>")
 }

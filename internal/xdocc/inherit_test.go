@@ -36,22 +36,23 @@ func TestSettingsPrecedence(t *testing.T) {
 }
 
 func TestStructuralPropertiesDoNotInherit(t *testing.T) {
-	// nav, name, noindex and promote describe one item and must not leak into
-	// the items below it
+	// nav, name and split describe one item and must not leak into the items
+	// below it
 	b := newBuild(t, map[string]string{
 		".templates/page.html": `{{ .Content }}`,
 		".templates/list.html": `{{ range .GlobalNav }}[{{ .Path }}({{ range .Children }}[{{ .Path }}]{{ end }})]{{ end }}`,
-		"1-dir/.xdocc":         "nav\nname: A directory\nnoindex\npromote\n",
-		"1-dir/1-sub/1-a.md":   "a",
+		"1-dir/.xdocc":         "nav\nname: A directory\nnosplit\npromote\n",
+		"1-dir/1-a.md":         "a",
+		"1-dir/2-sub/1-b.md":   "b",
 	})
 	b.compile()
 	// the .xdocc marks its own directory, not the one below it
 	b.want("dir/sub/index.html", "[dir()]")
-	if b.exists("dir/index.html") {
-		t.Error("noindex leaked or was ignored: dir/index.html exists")
+	if b.exists("dir/a.html") {
+		t.Error("nosplit was ignored: dir/a.html exists")
 	}
-	if !b.exists("dir/sub/index.html") {
-		t.Error("noindex leaked into dir/sub")
+	if !b.exists("dir/sub/b.html") {
+		t.Error("nosplit leaked into dir/sub")
 	}
 }
 
@@ -77,28 +78,27 @@ func TestFilenameBeatsXdoccOnTheDirectoryItself(t *testing.T) {
 	b.want("index.html", "[From name]")
 }
 
-func TestPromoteInXdocc(t *testing.T) {
-	b := newBuild(t, map[string]string{
-		".templates/page.html": `{{ .Content }}`,
-		".templates/list.html": `{{ range .Items }}[{{ .URL }}]{{ end }}`,
-		"1-featured/.xdocc":    "promote\n",
-		"1-featured/1-a.md":    "a",
-		"2-b.md":               "b",
-	})
-	b.compile()
-	b.want("index.html", "[featured/a.html][b.html]")
-}
-
 func TestSymlinkIsSiteWide(t *testing.T) {
-	// symlink is only read from the root .xdocc
+	// symlinking is the default and only the root .xdocc has a say in it
 	b := newBuild(t, map[string]string{
 		".templates/page.html": `{{ .Content }}`,
-		"1-dir/.xdocc":         "symlink\n",
+		"1-dir/.xdocc":         "symlink: false\n",
 		"1-dir/logo.svg":       "<svg/>",
 	})
 	b.compile()
-	if b.site.Symlink() {
-		t.Error("symlink was picked up from a directory below the root")
+	if !b.site.Symlink() {
+		t.Error("symlink was switched off from a directory below the root")
+	}
+
+	// the root .xdocc does have a say
+	b2 := newBuild(t, map[string]string{
+		".templates/page.html": `{{ .Content }}`,
+		".xdocc":               "symlink: false\n",
+		"1-dir/logo.svg":       "<svg/>",
+	})
+	b2.compile()
+	if b2.site.Symlink() {
+		t.Error("symlink: false in the root .xdocc was ignored")
 	}
 }
 

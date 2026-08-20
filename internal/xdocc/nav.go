@@ -79,14 +79,3 @@ func breadcrumb(dir, current *Item) []*Nav {
 	}
 	return append(breadcrumb(dir.Parent, current), node)
 }
-
-// isInGlobalNav reports whether dir is reachable through the global navigation:
-// the site root is, and so is every "nav" directory whose parents are.
-func isInGlobalNav(dir *Item) bool {
-	for p := dir; p.Parent != nil; p = p.Parent {
-		if !p.IsNav() {
-			return false
-		}
-	}
-	return true
-}

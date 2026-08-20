@@ -32,8 +32,9 @@ StandardOutput=journal
 StandardError=journal
 SyslogIdentifier=xdocc
 
-# hardening. If the root .xdocc uses post-processing, the command it runs has to
-# live inside these limits too; relax ProtectSystem or add ReadWritePaths then.
+# hardening. Anything added here (an ExecStartPost= that publishes the output,
+# say) has to live inside these limits too; relax ProtectSystem or add
+# ReadWritePaths then.
 NoNewPrivileges=yes
 PrivateTmp=yes
 PrivateDevices=yes

@@ -17,7 +17,9 @@ func TestLoadXdoccBareWords(t *testing.T) {
 		{"symlink: false\n", Props{PropSymlink: "false"}},
 		{"nav|nosplit\n", Props{PropNav: "", PropSplit: "false"}},
 		{"layout=wide\n", Props{PropLayout: "wide"}},
-		{"post-processing: rsync -a . host:/var/www\n", Props{PropPost: "rsync -a . host:/var/www"}},
+		// dropped legacy keys are accepted and ignored
+		{"post-processing: rsync -a . host:/var/www\n", Props{}},
+		{"promote\nvisible\ncopy\n", Props{}},
 		{"", Props{}},
 	}
 	for _, tt := range tests {
@@ -33,20 +35,18 @@ func TestLoadXdoccBareWords(t *testing.T) {
 }
 
 func TestSplitFrontmatter(t *testing.T) {
-	in := "---\nname: Challenge Task Winner FS25\ndate: 2025-06-02\nlayout: wide\n---\n#### Hello\ntext\n"
+	in := "---\nname: Challenge Task Winner FS25\nauthor: Someone\nlayout: wide\n---\n#### Hello\ntext\n"
 	props, body, err := SplitFrontmatter([]byte(in))
 	if err != nil {
 		t.Fatal(err)
 	}
-	want := Props{PropName: "Challenge Task Winner FS25", PropDate: "2025-06-02", PropLayout: "wide"}
+	// keys xdocc does not know are kept, so templates can read them
+	want := Props{PropName: "Challenge Task Winner FS25", "author": "Someone", PropLayout: "wide"}
 	if !reflect.DeepEqual(props, want) {
 		t.Errorf("props = %v, want %v", props, want)
 	}
 	if string(body) != "#### Hello\ntext\n" {
 		t.Errorf("body = %q", body)
-	}
-	if _, ok := ParseDate(props[PropDate]); !ok {
-		t.Errorf("date not parsed: %q", props[PropDate])
 	}
 }
 

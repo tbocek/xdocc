@@ -28,11 +28,9 @@ type Data struct {
 	Items      []*Data          // the items of a listing
 	ItemsByURL map[string]*Data // the same items, keyed by output file name
 
-	GlobalNav   []*Nav
-	LocalNav    []*Nav
-	CurrentNav  *Nav
-	Breadcrumb  []*Nav
-	IsGlobalNav bool
+	GlobalNav  []*Nav
+	CurrentNav *Nav
+	Breadcrumb []*Nav
 }
 
 // compiler holds the state of one compilation run.
@@ -40,6 +38,10 @@ type compiler struct {
 	site     *Site
 	produced map[string]bool
 	written  int
+
+	// noSymlink is set once symlinking has failed, so a file system without
+	// symlinks costs one failed attempt and not one per file.
+	noSymlink bool
 }
 
 // Compile reads the source tree and generates the output tree.
@@ -76,15 +78,7 @@ func (c *compiler) compileDir(dir *Item) error {
 			if err := c.compileDir(child); err != nil {
 				return err
 			}
-			if child.IsPromoted() {
-				promoted, err := c.promotedItems(child, dir, 0)
-				if err != nil {
-					return err
-				}
-				items = append(items, promoted...)
-				continue
-			}
-			if child.IsContent() {
+			if child.isContent() {
 				data, err := c.render(child, dir, 0)
 				if err != nil {
 					return err
@@ -98,7 +92,7 @@ func (c *compiler) compileDir(dir *Item) error {
 			if err := c.copyAsset(child); err != nil {
 				return err
 			}
-			if !child.IsContent() {
+			if !child.isContent() {
 				continue
 			}
 		}
@@ -110,7 +104,7 @@ func (c *compiler) compileDir(dir *Item) error {
 			index = data
 			continue
 		}
-		if child.IsContent() {
+		if child.isContent() {
 			items = append(items, data)
 		}
 		if child.IsTransformed() && child.Split() && dir.Split() {
@@ -131,7 +125,7 @@ func (c *compiler) compileDir(dir *Item) error {
 	}
 	// A directory without an order prefix is passed through: its files were
 	// copied above, but xdocc adds no listing of its own to it.
-	if !dir.IsContent() || dir.NoIndex() {
+	if !dir.isContent() {
 		return nil
 	}
 	listing, err := c.listing(dir, items)
@@ -157,38 +151,6 @@ func (c *compiler) listing(dir *Item, items []*Data) (*Data, error) {
 	return data, nil
 }
 
-// promotedItems collects the items a promoted directory contributes to its
-// parent listing.
-func (c *compiler) promotedItems(dir, page *Item, depth int) ([]*Data, error) {
-	if depth > maxLinkDepth {
-		return nil, nil
-	}
-	var items []*Data
-	for _, child := range dir.Children {
-		if child.IsDir && child.IsPromoted() {
-			nested, err := c.promotedItems(child, page, depth+1)
-			if err != nil {
-				return nil, err
-			}
-			items = append(items, nested...)
-			continue
-		}
-		if !child.IsContent() || child.IsIndex() {
-			continue
-		}
-		data, err := c.render(child, page, 0)
-		if err != nil {
-			return nil, err
-		}
-		items = append(items, data)
-	}
-	sortData(items, dir.Sort())
-	if limit := dir.PromoteLimit(); limit > 0 && len(items) > limit {
-		items = items[:limit]
-	}
-	return items, nil
-}
-
 // render turns one item into the HTML that goes into a page. page is the item
 // whose page it is rendered for, which decides the relative paths.
 func (c *compiler) render(item, page *Item, depth int) (*Data, error) {
@@ -198,11 +160,7 @@ func (c *compiler) render(item, page *Item, depth int) (*Data, error) {
 		return nil, err
 	}
 	data.Content = template.HTML(substitute(string(raw), item, data.Root))
-	name := TemplateDirectory
-	if !item.IsDir {
-		name = handlerTemplate[item.Handler()]
-	}
-	rendered, err := c.site.templates.Render(name, data)
+	rendered, err := c.site.templates.Render(handlerTemplate[item.Handler()], data)
 	if err != nil {
 		return nil, err
 	}
@@ -223,6 +181,10 @@ func (c *compiler) content(item, page *Item, depth int) (template.HTML, error) {
 	case HandlerHTML:
 		return c.site.cached(item, func(body []byte) (template.HTML, error) {
 			return renderHTML(body), nil
+		})
+	case HandlerBib:
+		return c.site.cached(item, func(body []byte) (template.HTML, error) {
+			return template.HTML(renderBib(body)), nil
 		})
 	case HandlerLink:
 		return c.link(item, page, depth)
@@ -290,10 +252,8 @@ func (c *compiler) newData(item, page *Item) *Data {
 	}
 	data := &Data{Item: item, Root: dir.Root()}
 	data.GlobalNav = navTree(c.site.Root, dir)
-	data.LocalNav = navTree(dir, dir)
 	data.CurrentNav = findNav(data.GlobalNav, dir)
 	data.Breadcrumb = breadcrumb(dir, dir)
-	data.IsGlobalNav = isInGlobalNav(dir)
 	return data
 }
 
@@ -359,22 +319,31 @@ func (c *compiler) write(rel string, content []byte) error {
 	return nil
 }
 
-// copyAsset copies a file to the output, or symlinks it when the site says so.
+// copyAsset puts a file into the output: a symlink where the file system has
+// them, a copy where it has not.
 func (c *compiler) copyAsset(item *Item) error {
 	target := filepath.Join(c.site.Gen, filepath.FromSlash(item.URL))
 	c.produce(target)
 	if err := os.MkdirAll(filepath.Dir(target), 0o755); err != nil {
 		return err
 	}
-	if c.site.Symlink() {
+	if c.site.Symlink() && !c.noSymlink {
 		if link, err := os.Readlink(target); err == nil && link == item.Source {
 			return nil
 		}
 		if err := os.RemoveAll(target); err != nil {
 			return err
 		}
-		c.written++
-		return os.Symlink(item.Source, target)
+		if err := os.Symlink(item.Source, target); err == nil {
+			c.written++
+			return nil
+		} else {
+			// Windows without the privilege, a FAT stick, an exported share:
+			// whatever the reason, this tree has no symlinks and copying is
+			// what is left. Say so once and copy everything from here on.
+			log.Printf("xdocc: cannot symlink (%v), copying instead", err)
+			c.noSymlink = true
+		}
 	}
 	if info, err := os.Lstat(target); err == nil && info.Mode().IsRegular() &&
 		info.Size() == item.FileSize && !info.ModTime().Before(item.ModTime) {

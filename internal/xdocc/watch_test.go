@@ -128,26 +128,3 @@ func TestCachePersistsBetweenRuns(t *testing.T) {
 		t.Errorf("a.html = %q", got)
 	}
 }
-
-func TestPostProcessing(t *testing.T) {
-	b := newBuild(t, map[string]string{
-		".templates/page.html": `{{ .Content }}`,
-		".xdocc":               "post-processing: echo done > post.txt\n",
-		"1-a.md":               "a",
-	})
-	site, err := NewSite(b.src, b.gen)
-	if err != nil {
-		t.Fatal(err)
-	}
-	site.SetCache(OpenCache(""))
-	if _, err := site.Build(); err != nil {
-		t.Fatal(err)
-	}
-	data, err := os.ReadFile(filepath.Join(b.gen, "post.txt"))
-	if err != nil {
-		t.Fatalf("the post-processing command did not run: %v", err)
-	}
-	if strings.TrimSpace(string(data)) != "done" {
-		t.Errorf("post.txt = %q", data)
-	}
-}

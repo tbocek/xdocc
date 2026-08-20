@@ -24,8 +24,8 @@ func TestParseNameOrder(t *testing.T) {
 		{"2-news.link", true, 2, false, "news", "news", HandlerLink, "news.html"},
 
 		// the "-" after the order is mandatory
-		{"7.md", false, 0, false, "7.md", "", HandlerMarkdown, "7.html"},
-		{"7-.md", true, 7, false, "index", "index", HandlerMarkdown, "index.html"},
+		{"7.md", false, 0, false, "7.md", "", HandlerMarkdown, "7.md"},
+		{"7-.md", false, 0, false, "7-.md", "", HandlerMarkdown, "7-.md"},
 		{"label-1.jpg", false, 0, false, "label-1.jpg", "", HandlerAsset, "label-1.jpg"},
 		{"logo.svg", false, 0, false, "logo.svg", "", HandlerAsset, "logo.svg"},
 
@@ -33,8 +33,8 @@ func TestParseNameOrder(t *testing.T) {
 		{"0-title.md", true, 0, true, "title", "title", HandlerMarkdown, "title.html"},
 
 		// dates
-		{"2014-01-01.md", false, 0, false, "2014-01-01.md", "", HandlerMarkdown, "2014-01-01.html"},
-		{"2014-01-01-.md", true, 0, false, "index", "index", HandlerMarkdown, "index.html"},
+		{"2014-01-01.md", false, 0, false, "2014-01-01.md", "", HandlerMarkdown, "2014-01-01.md"},
+		{"2014-01-01-.md", false, 0, false, "2014-01-01-.md", "", HandlerMarkdown, "2014-01-01-.md"},
 		{"2014-myurl.md", true, 2014, false, "myurl", "myurl", HandlerMarkdown, "myurl.html"},
 		{"2014-01.md", true, 2014, false, "01", "01", HandlerMarkdown, "01.html"},
 
@@ -106,8 +106,6 @@ func TestParseNameEquivalentSpellings(t *testing.T) {
 		"1-url123[Myname]|tag1=x|tag2=y|tag3=z.txt",
 		"1-url123[Myname]tag1=x|tag2=y|tag3=z.txt",
 		"1-url123|name=Myname|tag1=x|tag2=y|tag3=z.txt",
-		"1-url123|n=Myname|tag1=x|tag2=y|tag3=z.txt",
-		"1-url123:Myname|tag1=x|tag2=y|tag3=z.txt",
 	}
 	want := Props{"name": "Myname", "tag1": "x", "tag2": "y", "tag3": "z"}
 	for _, raw := range spellings {
@@ -141,11 +139,10 @@ func TestParseNameProps(t *testing.T) {
 		{"1-index|page.md", Props{PropSplit: "false"}},
 		{"1-gallery|nav|sort=desc|layout=wide.md", Props{PropNav: "", PropSort: SortDesc, PropLayout: "wide"}},
 		{"1-a|desc.md", Props{PropSort: SortDesc}},
-		{"1-a|prm1.md", Props{PropPromote: "1"}},
-		{"1-a|prm.md", Props{PropPromote: ""}},
-		{"1-a|hid|vis|cp|nidx.md", Props{PropHidden: "", PropVisible: "", PropCopy: "", PropNoIndex: ""}},
+		{"1-a|hid|nidx|noindex|n=x|dsc.md", Props{}},
 		// dropped legacy properties are accepted and ignored
 		{"1-a|crop=10|content|p=3.md", Props{}},
+		{"1-a|prm1|vis|cp|pp=x.md", Props{}},
 		// no properties at all
 		{"1-a.md", Props{}},
 		// a bracket without properties after it
@@ -191,14 +188,15 @@ func TestParseNameExtensions(t *testing.T) {
 }
 
 func TestParseNameIndex(t *testing.T) {
-	for _, raw := range []string{"7-.md", "1-index.md", "0-.md"} {
+	for _, raw := range []string{"1-index.md", "0-index.md", "2025-06-02-index[FS25].md"} {
 		if n := ParseName(raw); !n.IsIndex() {
 			t.Errorf("%q: expected an index item, url = %q", raw, n.URL)
 		}
 	}
 	// without an order prefix xdocc does not take charge of the file, so
-	// "index.md" is copied and not the generated page of its directory
-	for _, raw := range []string{"1-about.md", "indexes.md", "1-indexed.md", "index.md", "index.html"} {
+	// "index.md" is copied and not the generated page of its directory, and
+	// "7-.md" has an order but no url, which is not a name xdocc reads
+	for _, raw := range []string{"1-about.md", "indexes.md", "1-indexed.md", "index.md", "index.html", "7-.md", "0-.md"} {
 		if n := ParseName(raw); n.IsIndex() {
 			t.Errorf("%q: unexpected index item", raw)
 		}

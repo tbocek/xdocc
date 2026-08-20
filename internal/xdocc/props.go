@@ -2,48 +2,30 @@ package xdocc
 
 import (
 	"sort"
-	"strconv"
 	"strings"
 )
 
 // Canonical property names.
 const (
 	// structural, never inherited
-	PropNav     = "nav"
-	PropName    = "name"
-	PropNoIndex = "noindex"
-	PropPromote = "promote"
-	PropSplit   = "split"
+	PropNav   = "nav"
+	PropName  = "name"
+	PropSplit = "split"
 
 	// settings, inherited down the tree
-	PropLayout  = "layout"
-	PropSort    = "sort"
-	PropHidden  = "hidden"
-	PropVisible = "visible"
-	PropCopy    = "copy"
+	PropLayout = "layout"
+	PropSort   = "sort"
 
 	// site settings, root .xdocc only
 	PropSymlink = "symlink"
-	PropPost    = "post-processing"
-
-	// set by frontmatter only
-	PropDate = "date"
 )
 
 // structural properties describe a single item and are never inherited from a
 // parent .xdocc.
 var structural = map[string]bool{
-	PropNav:     true,
-	PropName:    true,
-	PropNoIndex: true,
-	PropPromote: true,
-	PropSplit:   true,
-}
-
-// site properties are only read from the root .xdocc.
-var siteOnly = map[string]bool{
-	PropSymlink: true,
-	PropPost:    true,
+	PropNav:   true,
+	PropName:  true,
+	PropSplit: true,
 }
 
 // alias maps a legacy spelling to a canonical key, optionally forcing a value.
@@ -53,28 +35,30 @@ type alias struct {
 	fixed bool
 }
 
+// One spelling per property, and one alias each where the short form is what
+// the tree already says: "l=" for layout, "nosplit" and "page" for split.
 var aliases = map[string]alias{
-	"n":        {key: PropName},
-	"l":        {key: PropLayout},
-	"hide":     {key: PropHidden},
-	"hid":      {key: PropHidden},
-	"vis":      {key: PropVisible},
-	"cp":       {key: PropCopy},
-	"nidx":     {key: PropNoIndex},
-	"prm":      {key: PropPromote},
-	"prm1":     {key: PropPromote, value: "1", fixed: true},
-	"promote1": {key: PropPromote, value: "1", fixed: true},
-	"nosplit":  {key: PropSplit, value: "false", fixed: true},
-	"page":     {key: PropSplit, value: "false", fixed: true},
-	"pag":      {key: PropSplit, value: "false", fixed: true},
-	"asc":      {key: PropSort, value: SortAsc, fixed: true},
-	"desc":     {key: PropSort, value: SortDesc, fixed: true},
-	"dsc":      {key: PropSort, value: SortDesc, fixed: true},
-	"pp":       {key: PropPost},
+	"l":       {key: PropLayout},
+	"nosplit": {key: PropSplit, value: "false", fixed: true},
+	"page":    {key: PropSplit, value: "false", fixed: true},
+	"asc":     {key: PropSort, value: SortAsc, fixed: true},
+	"desc":    {key: PropSort, value: SortDesc, fixed: true},
 }
 
 // dropped properties are accepted and ignored, so old trees still compile.
+// "copy" and "visible" are spelled by leaving the order prefix off or putting
+// it on, "promote" is what a .link file does, "hidden" is what a leading dot
+// does, "noindex" is what leaving the order prefix off a directory does, and
+// post-processing belongs to whatever starts xdocc.
 var dropped = map[string]bool{
+	"hidden": true, "hide": true, "hid": true,
+	"noindex": true, "nidx": true,
+	// short spellings that were only ever noise: one word per property is enough
+	"n": true, "pag": true, "dsc": true,
+	"copy": true, "cp": true,
+	"visible": true, "vis": true,
+	"promote": true, "prm": true, "prm1": true, "promote1": true,
+	"post-processing": true, "pp": true,
 	"content": true, "cont": true,
 	"paging": true, "p": true,
 	"crop":        true,
@@ -139,19 +123,6 @@ func (p Props) Bool(key string) (value, ok bool) {
 		return false, true
 	}
 	return true, true
-}
-
-// Int reads an integer property.
-func (p Props) Int(key string) (int, bool) {
-	v, ok := p[key]
-	if !ok {
-		return 0, false
-	}
-	n, err := strconv.Atoi(strings.TrimSpace(v))
-	if err != nil {
-		return 0, false
-	}
-	return n, true
 }
 
 // Keys returns the property names in a stable order.

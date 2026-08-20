@@ -65,7 +65,7 @@ func main() {
 	site.SetCache(cache)
 
 	if !*watch {
-		written, err := site.Build()
+		written, err := site.Compile()
 		if err != nil {
 			log.Fatalf("xdocc: %v", err)
 		}

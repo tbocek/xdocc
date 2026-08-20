@@ -66,20 +66,20 @@ func (s *Site) Load() error {
 	return nil
 }
 
-// Symlink reports whether assets are symlinked instead of copied. It is a
-// site-wide setting, read from the root .xdocc.
+// Symlink reports whether assets are symlinked into the output instead of
+// copied. Symlinking is the default: a site whose weight is in its files - a
+// lecture folder full of video, a directory of PDFs - is then generated in
+// milliseconds and takes no second copy of the disk. A site that hands its
+// output to something which cannot follow a link out of the output tree turns
+// it off with "symlink: false" in the root .xdocc. It is a site-wide setting,
+// read from the root .xdocc only.
+//
+// Where the file system has no symlinks the build falls back to copying by
+// itself, so this is a preference and not a promise.
 func (s *Site) Symlink() bool {
 	if s.Root == nil {
-		return false
+		return true
 	}
 	v, ok := s.Root.Props.Bool(PropSymlink)
-	return ok && v
-}
-
-// PostProcessing is the command to run after a successful generation.
-func (s *Site) PostProcessing() string {
-	if s.Root == nil {
-		return ""
-	}
-	return s.Root.Props[PropPost]
+	return !ok || v
 }

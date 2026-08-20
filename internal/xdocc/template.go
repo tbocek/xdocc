@@ -14,21 +14,24 @@ import (
 // Template names. A site overrides any of them by dropping a file of the same
 // name into .templates.
 const (
-	TemplatePage      = "page.html"
-	TemplateList      = "list.html"
-	TemplateMarkdown  = "markdown.html"
-	TemplateHTML      = "html.html"
-	TemplateLink      = "link.html"
-	TemplateFile      = "file.html"
-	TemplateNav       = "nav.html"
-	TemplateDirectory = "directory.html"
+	TemplatePage     = "page.html"
+	TemplateList     = "list.html"
+	TemplateMarkdown = "markdown.html"
+	TemplateHTML     = "html.html"
+	TemplateLink     = "link.html"
+	TemplateBib      = "bib.html"
+	TemplateFile     = "file.html"
+	TemplateNav      = "nav.html"
 )
 
 // handlerTemplate maps a handler to the template that renders one of its items.
+// A directory has no handler of its own and is rendered by file.html, the same
+// as an asset: both are an item a listing links to rather than shows.
 var handlerTemplate = map[string]string{
 	HandlerMarkdown: TemplateMarkdown,
 	HandlerHTML:     TemplateHTML,
 	HandlerLink:     TemplateLink,
+	HandlerBib:      TemplateBib,
 	HandlerAsset:    TemplateFile,
 }
 
@@ -53,12 +56,12 @@ var defaultTemplates = map[string]string{
 {{ with .Children }}{{ template "nav.html" . }}{{ end }}</li>
 {{ end }}</ul>
 `,
-	TemplateList:      `{{ range .Items }}{{ .Content }}{{ end }}`,
-	TemplateMarkdown:  `{{ .Content }}`,
-	TemplateHTML:      `{{ .Content }}`,
-	TemplateLink:      `{{ .Content }}`,
-	TemplateDirectory: `<a href="{{ .Root }}{{ .Link }}">{{ if .Name }}{{ .Name }}{{ else }}{{ .FileName }}{{ end }}</a>`,
-	TemplateFile:      `<a href="{{ .Root }}{{ .Link }}">{{ if .Name }}{{ .Name }}{{ else }}{{ .FileName }}{{ end }}</a>`,
+	TemplateList:     `{{ range .Items }}{{ .Content }}{{ end }}`,
+	TemplateMarkdown: `{{ .Content }}`,
+	TemplateHTML:     `{{ .Content }}`,
+	TemplateLink:     `{{ .Content }}`,
+	TemplateBib:      `{{ .Content }}`,
+	TemplateFile:     `<a href="{{ .Root }}{{ .Link }}">{{ if .Name }}{{ .Name }}{{ else }}{{ .FileName }}{{ end }}</a>`,
 }
 
 var templateFuncs = template.FuncMap{
