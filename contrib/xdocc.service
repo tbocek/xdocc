@@ -1,0 +1,59 @@
+# xdocc as a service: watches the source tree and recompiles on every change.
+#
+#   install -m 755 xdocc /usr/local/bin/xdocc
+#   install -m 644 contrib/xdocc.service /etc/systemd/system/xdocc.service
+#   systemctl daemon-reload && systemctl enable --now xdocc
+#
+# Adjust the two directories and the user below; everything else works as is.
+
+[Unit]
+Description=xdocc static site generator
+Documentation=https://github.com/tbocek/xdocc
+After=network.target
+
+[Service]
+Type=simple
+User=xdocc
+Group=xdocc
+
+Environment=XDOCC_SOURCE=/srv/xdocc/site
+Environment=XDOCC_OUTPUT=/srv/www/site
+ExecStart=/usr/local/bin/xdocc -s ${XDOCC_SOURCE} -o ${XDOCC_OUTPUT} -c ${CACHE_DIRECTORY}/cache.gob -w
+
+# the cache survives restarts, so a restart is not a full rebuild
+CacheDirectory=xdocc
+CacheDirectoryMode=0750
+
+Restart=on-failure
+RestartSec=5s
+
+# logging: xdocc writes plain lines to stdout
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=xdocc
+
+# hardening. If the root .xdocc uses post-processing, the command it runs has to
+# live inside these limits too; relax ProtectSystem or add ReadWritePaths then.
+NoNewPrivileges=yes
+PrivateTmp=yes
+PrivateDevices=yes
+ProtectSystem=strict
+ProtectHome=yes
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+ProtectControlGroups=yes
+ProtectClock=yes
+RestrictNamespaces=yes
+RestrictRealtime=yes
+RestrictSUIDSGID=yes
+LockPersonality=yes
+MemoryDenyWriteExecute=yes
+SystemCallFilter=@system-service
+SystemCallErrorNumber=EPERM
+CapabilityBoundingSet=
+# the output directory is the only place xdocc writes to
+ReadWritePaths=/srv/www/site
+ReadOnlyPaths=/srv/xdocc/site
+
+[Install]
+WantedBy=multi-user.target
