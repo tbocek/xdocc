@@ -122,17 +122,16 @@ func (c *compiler) compileDir(dir *Item) error {
 
 	sortData(items, dir.Sort())
 
-	// A directory without an order prefix is passed through: its files were
-	// copied above, but xdocc adds no index of its own to it.
-	if !dir.IsContent() {
-		return nil
-	}
 	// An item called "index" is the page of its directory and replaces the
-	// generated listing.
+	// generated listing. It is the page itself, not an item next to it, so
+	// split does not apply and it is written even into a directory that xdocc
+	// otherwise only passes through.
 	if index != nil {
 		return c.writePage(dir, index)
 	}
-	if dir.NoIndex() {
+	// A directory without an order prefix is passed through: its files were
+	// copied above, but xdocc adds no listing of its own to it.
+	if !dir.IsContent() || dir.NoIndex() {
 		return nil
 	}
 	listing, err := c.listing(dir, items)

@@ -439,3 +439,22 @@ func TestCompilePassthroughSubtree(t *testing.T) {
 	// and the directory does not appear in the listing above it
 	b.want("index.html", "[[a.html]]")
 }
+
+// A directory that xdocc otherwise passes through still gets the page an
+// ordered index item inside it describes. That is how a folder of lecture
+// material carries a written introduction without being ordered itself.
+func TestCompileIndexItemInPassthroughDir(t *testing.T) {
+	b := newBuild(t, map[string]string{
+		".templates/page.html":           `[{{ .Content }}]`,
+		".templates/list.html":           listTemplate,
+		".templates/markdown.html":       `{{ .Content }}`,
+		"1-a.md":                         "a",
+		"fs25/2025-02-17-index[FS25].md": "# FS25",
+		"fs25/slides.pdf":                "%PDF",
+	})
+	b.compile()
+	b.want("fs25/index.html", `[<h1 id="fs25">FS25</h1>]`)
+	b.want("fs25/slides.pdf", "%PDF")
+	// the directory is still not part of the site's own structure
+	b.want("index.html", "[[a.html]]")
+}

@@ -30,19 +30,25 @@ xdocc -s ./site -o ./www -w       # keep running and recompile on every change
 
 ## 1. The model
 
-Two independent questions decide what happens to a file:
+**The order prefix decides whether xdocc touches a file at all.**
 
-- **Does the name start with an order prefix?** → it is *content*: it is listed in its
-  directory's index and published under a clean URL.
-- **Does its extension have a handler?** → it is *transformed* into HTML; otherwise it
-  is copied, or symlinked, verbatim.
+- **`1-about.md`** — an order prefix: xdocc takes charge. The file is transformed if its
+  extension has a handler, listed in its directory's index, and published under a clean
+  URL (`about.html`).
+- **`hash.html`** — no order prefix: xdocc passes it through byte for byte, whatever its
+  extension, and does not list it. A directory without an order prefix is passed through
+  the same way and gets no generated index.
+
+That second rule is what lets a self-contained thing — a demo, a generated report,
+someone else's web app with its own `<head>`, its own CSS and its own `index.html` — be
+dropped into the source tree and come out unharmed.
 
 | | how it's recognised | what happens |
 |---|---|---|
 | **content** | `1-about.md` | `about.html`, listed in the index |
 | **content, no handler** | `1-photo.jpg` | `photo.jpg`, listed in the index |
-| **no order prefix** | `logo.svg` | `logo.svg`, not listed |
-| **no order prefix, handler** | `notes.md` | `notes.html`, not listed |
+| **passed through** | `logo.svg`, `notes.md`, `demo/` | copied verbatim, not listed |
+| **pulled back in** | `notes.md` under `visible` | `notes.html`, listed last |
 | **hidden** | `.draft.md`, `notes.md~`, `1-a\|hidden.md` | not in the output at all |
 
 ```
@@ -56,10 +62,17 @@ site/                            www/
 │   ├── 1-team.md         ────►  │   ├── team.html
 │   └── photo.jpg         ────►  │   └── photo.jpg      (copied)
 ├── logo.svg              ────►  ├── logo.svg           (copied)
+├── demo/                 ────►  ├── demo/              (copied, no index added)
+│   └── index.html        ────►  │   └── index.html
                                  └── index.html         (listing of intro + about)
 ```
 
-Every directory also produces an `index.html` listing its items.
+Every directory **that has an order prefix** also produces an `index.html` listing its
+items. A directory without one gets a page only if it contains an ordered item called
+`index` — `2025-02-17-index[FS25].md` gives `fs25/index.html` without making `fs25/`
+part of the site's structure.
+
+---
 
 ---
 
@@ -115,11 +128,11 @@ The text between the `-` and the first `.` or `|` becomes the output filename:
 `1-about.md` → `about.html`. Nested directories nest the URL:
 `2-docs/1-intro.md` → `docs/intro.html`.
 
-An **empty URL means `index`**, so `7-.md` produces `index.html`. That is the same
-thing `1-index.md` does, and a plain `index.md` without an order prefix as well: an
-item whose URL is `index` becomes the page of its directory and **replaces the
-generated listing**. It is written even when splitting is off, because it *is* the
-directory's page.
+An **empty URL means `index`**, so `7-.md` produces `index.html`, and so does
+`1-index.md`: an item whose URL is `index` becomes the page of its directory and
+**replaces the generated listing**. It is written even when splitting is off, because
+it *is* the directory's page. A plain `index.md` has no order prefix, so xdocc leaves
+it alone — it is copied, and the web server serves it as the directory page by itself.
 
 ### Display name
 
@@ -164,7 +177,6 @@ but because it is the last one in the chain.
 
 ```yaml
 # site/.xdocc — applies to the whole site
-split: false
 symlink: true
 layout: default
 ```
@@ -177,9 +189,9 @@ nosplit
 nav|layout=wide
 ```
 
-Four properties **never inherit**, because inheriting them is never what you mean:
-`nav`, `name`, `noindex` and `promote`. They describe one item. A `.xdocc` may still
-set them — it then describes *its own* directory, not the ones below it:
+Five properties **never inherit**, because inheriting them is never what you mean:
+`nav`, `name`, `noindex`, `promote` and `split`. They describe one item. A `.xdocc` may
+still set them — it then describes *its own* directory, not the ones below it:
 
 ```
 1-news[News]/.xdocc     nav          →  the news directory is in the navigation,
@@ -216,12 +228,12 @@ with it the sort key.
 | `name` | text | any | display name |
 | `noindex` | flag | directory | do not write an `index.html` here |
 | `promote` | flag or a number | directory | merge this directory's items into the parent's listing; `promote=1` merges only the first |
+| `split` | bool, default `true` | directory or item | `false`: no page of its own — the item appears only inside its directory's `index.html`. On a directory it speaks for the items directly inside it and reaches no deeper, so `nosplit` in the root `.xdocc` folds the front page together without flattening the sections below it |
 
 ### Settings — inherited down the tree
 
 | Property | Value | Default | Meaning |
 |---|---|---|---|
-| `split` | bool | `true` | `false`: no per-item pages — items only appear in their directory's `index.html` |
 | `layout` | text | — | free-form string handed to templates as `.Layout`; templates decide what it means |
 | `sort` | `auto`, `asc`, `desc` | `auto` | `auto` sorts dated items newest first and numbered items ascending |
 | `hidden` | bool | `false` | keep out of the output entirely |
@@ -262,8 +274,9 @@ By default each content item becomes its own page **and** appears in its directo
 ```
 
 With `nosplit` in `1-news/.xdocc`, the individual pages are not written and everything
-lands in `news/index.html`. Put it in the root `.xdocc` and the whole site works that
-way: one page per directory.
+lands in `news/index.html`. It applies to that directory only and does not reach the
+directories below it, so `nosplit` in the root `.xdocc` gives you a front page that is
+one long scroll while the sections keep their own pages.
 
 `split` also works on a single item — `0-title|nosplit.md` contributes to the index but
 gets no page of its own. Templates should link to items with `.Link`, which points at
