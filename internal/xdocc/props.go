@@ -8,9 +8,11 @@ import (
 // Canonical property names.
 const (
 	// structural, never inherited
-	PropNav   = "nav"
-	PropName  = "name"
-	PropSplit = "split"
+	PropNav      = "nav"
+	PropName     = "name"
+	PropNolist   = "nolist"
+	PropLinkOnly = "linkonly"
+	PropSplit    = "split"
 
 	// settings, inherited down the tree
 	PropLayout = "layout"
@@ -23,9 +25,11 @@ const (
 // structural properties describe a single item and are never inherited from a
 // parent .xdocc.
 var structural = map[string]bool{
-	PropNav:   true,
-	PropName:  true,
-	PropSplit: true,
+	PropNav:      true,
+	PropName:     true,
+	PropNolist:   true,
+	PropLinkOnly: true,
+	PropSplit:    true,
 }
 
 // alias maps a legacy spelling to a canonical key, optionally forcing a value.

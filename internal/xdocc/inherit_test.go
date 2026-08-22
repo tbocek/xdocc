@@ -4,8 +4,8 @@ import "testing"
 
 func TestSettingsInherit(t *testing.T) {
 	b := newBuild(t, map[string]string{
-		".templates/page.html": `{{ .Content }}`,
-		".templates/list.html": `{{ range .Items }}[{{ .Layout }}]{{ end }}`,
+		".templates/page.html": `{{ data.Content }}`,
+		".templates/list.html": `{% for x in data.Items %}[{{ x.Layout }}]{% endfor %}`,
 		".xdocc":               "layout: root\n",
 		"1-a.md":               "a",
 		"2-sub/.xdocc":         "layout: sub\n",
@@ -23,8 +23,8 @@ func TestSettingsInherit(t *testing.T) {
 
 func TestSettingsPrecedence(t *testing.T) {
 	b := newBuild(t, map[string]string{
-		".templates/page.html": `{{ .Content }}`,
-		".templates/list.html": `{{ range .Items }}[{{ .Name }}/{{ .Layout }}]{{ end }}`,
+		".templates/page.html": `{{ data.Content }}`,
+		".templates/list.html": `{% for x in data.Items %}[{{ x.Name }}/{{ x.Layout }}]{% endfor %}`,
 		".xdocc":               "layout: root\n",
 		// the filename wins over front matter, which wins over .xdocc
 		"1-a|layout=name.md": "---\nlayout: front\n---\na\n",
@@ -39,8 +39,8 @@ func TestStructuralPropertiesDoNotInherit(t *testing.T) {
 	// nav, name and split describe one item and must not leak into the items
 	// below it
 	b := newBuild(t, map[string]string{
-		".templates/page.html": `{{ .Content }}`,
-		".templates/list.html": `{{ range .GlobalNav }}[{{ .Path }}({{ range .Children }}[{{ .Path }}]{{ end }})]{{ end }}`,
+		".templates/page.html": `{{ data.Content }}`,
+		".templates/list.html": `{% for x in data.GlobalNav %}[{{ x.Path }}({% for c in x.Children %}[{{ c.Path }}]{% endfor %})]{% endfor %}`,
 		"1-dir/.xdocc":         "nav\nname: A directory\nnosplit\npromote\n",
 		"1-dir/1-a.md":         "a",
 		"1-dir/2-sub/1-b.md":   "b",
@@ -58,8 +58,8 @@ func TestStructuralPropertiesDoNotInherit(t *testing.T) {
 
 func TestDirectoryNameFromXdocc(t *testing.T) {
 	b := newBuild(t, map[string]string{
-		".templates/page.html": `{{ .Content }}`,
-		".templates/list.html": `{{ range .GlobalNav }}[{{ .Name }}]{{ end }}`,
+		".templates/page.html": `{{ data.Content }}`,
+		".templates/list.html": `{% for x in data.GlobalNav %}[{{ x.Name }}]{% endfor %}`,
 		"1-dir/.xdocc":         "nav\nname: A directory\n",
 		"1-dir/1-a.md":         "a",
 	})
@@ -69,8 +69,8 @@ func TestDirectoryNameFromXdocc(t *testing.T) {
 
 func TestFilenameBeatsXdoccOnTheDirectoryItself(t *testing.T) {
 	b := newBuild(t, map[string]string{
-		".templates/page.html":        `{{ .Content }}`,
-		".templates/list.html":        `{{ range .GlobalNav }}[{{ .Name }}]{{ end }}`,
+		".templates/page.html":        `{{ data.Content }}`,
+		".templates/list.html":        `{% for x in data.GlobalNav %}[{{ x.Name }}]{% endfor %}`,
 		"1-dir[From name]|nav/.xdocc": "name: From xdocc\n",
 		"1-dir[From name]|nav/1-a.md": "a",
 	})
@@ -81,7 +81,7 @@ func TestFilenameBeatsXdoccOnTheDirectoryItself(t *testing.T) {
 func TestSymlinkIsSiteWide(t *testing.T) {
 	// symlinking is the default and only the root .xdocc has a say in it
 	b := newBuild(t, map[string]string{
-		".templates/page.html": `{{ .Content }}`,
+		".templates/page.html": `{{ data.Content }}`,
 		"1-dir/.xdocc":         "symlink: false\n",
 		"1-dir/logo.svg":       "<svg/>",
 	})
@@ -92,7 +92,7 @@ func TestSymlinkIsSiteWide(t *testing.T) {
 
 	// the root .xdocc does have a say
 	b2 := newBuild(t, map[string]string{
-		".templates/page.html": `{{ .Content }}`,
+		".templates/page.html": `{{ data.Content }}`,
 		".xdocc":               "symlink: false\n",
 		"1-dir/logo.svg":       "<svg/>",
 	})
@@ -107,7 +107,7 @@ func TestSymlinkIsSiteWide(t *testing.T) {
 // sections are not.
 func TestSplitIsNotInherited(t *testing.T) {
 	b := newBuild(t, map[string]string{
-		".templates/page.html": `{{ .Content }}`,
+		".templates/page.html": `{{ data.Content }}`,
 		".templates/list.html": listTemplate,
 		".xdocc":               "nosplit\n",
 		"1-intro.md":           "intro",

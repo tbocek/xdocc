@@ -25,7 +25,7 @@ func waitFor(t *testing.T, what string, condition func() bool) {
 
 func TestWatchRecompilesOnChange(t *testing.T) {
 	b := newBuild(t, map[string]string{
-		".templates/page.html": `{{ .Content }}`,
+		".templates/page.html": `{{ data.Content }}`,
 		"1-a.md":               "first",
 	})
 	site, err := NewSite(b.src, b.gen)
@@ -68,7 +68,7 @@ func TestWatchRecompilesOnChange(t *testing.T) {
 
 func TestWatchPicksUpTemplateChanges(t *testing.T) {
 	b := newBuild(t, map[string]string{
-		".templates/page.html": `[{{ .Content }}]`,
+		".templates/page.html": `[{% if data.Content %}{{ data.Content }}{% endif %}]`,
 		"1-a.md":               "text",
 	})
 	site, err := NewSite(b.src, b.gen)
@@ -85,14 +85,14 @@ func TestWatchPicksUpTemplateChanges(t *testing.T) {
 		return strings.ReplaceAll(strings.TrimSpace(string(data)), "\n", "")
 	}
 	waitFor(t, "the first build", func() bool { return read() == "[<p>text</p>]" })
-	b.file(".templates/page.html", `({{ .Content }})`)
+	b.file(".templates/page.html", `({{ data.Content }})`)
 	waitFor(t, "the template change", func() bool { return read() == "(<p>text</p>)" })
 }
 
 func TestCachePersistsBetweenRuns(t *testing.T) {
 	dir := t.TempDir()
 	b := newBuild(t, map[string]string{
-		".templates/page.html": `{{ .Content }}`,
+		".templates/page.html": `{{ data.Content }}`,
 		"1-a.md":               "a",
 		"2-b.md":               "b",
 	})

@@ -1,14 +1,14 @@
 package xdocc
 
 import (
-	"bytes"
 	"fmt"
-	"html/template"
 	"os"
 	"path"
 	"path/filepath"
 	"strings"
 	"time"
+
+	"github.com/osteele/liquid"
 )
 
 // Template names. A site overrides any of them by dropping a file of the same
@@ -35,67 +35,77 @@ var handlerTemplate = map[string]string{
 	HandlerAsset:    TemplateFile,
 }
 
+// defaultTemplates are the built-in templates, in Liquid. A site overrides any
+// of them by dropping a same-named file into .templates.
 var defaultTemplates = map[string]string{
 	TemplatePage: `<!DOCTYPE html>
 <html>
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>{{ if .Name }}{{ .Name }}{{ else }}{{ .URL }}{{ end }}</title>
+<title>{% if data.Name %}{{ data.Name }}{% else %}{{ data.URL }}{% endif %}</title>
 </head>
 <body>
-{{ with .GlobalNav }}<nav>{{ template "nav.html" . }}</nav>{{ end }}
+{% if data.GlobalNav %}<nav>{{ data.NavHTML }}</nav>{% endif %}
 <main>
-{{ .Content }}
+{{ data.Content }}
 </main>
 </body>
 </html>
 `,
-	TemplateNav: `<ul>
-{{ range . }}<li><a href="{{ .Href }}"{{ if .Active }} class="active"{{ end }}>{{ .Name }}</a>
-{{ with .Children }}{{ template "nav.html" . }}{{ end }}</li>
-{{ end }}</ul>
-`,
-	TemplateList:     `{{ range .Items }}{{ .Content }}{{ end }}`,
-	TemplateMarkdown: `{{ .Content }}`,
-	TemplateHTML:     `{{ .Content }}`,
-	TemplateLink:     `{{ .Content }}`,
-	TemplateBib:      `{{ .Content }}`,
-	TemplateFile:     `<a href="{{ .Root }}{{ .Link }}">{{ if .Name }}{{ .Name }}{{ else }}{{ .FileName }}{{ end }}</a>`,
+	// nav.html is not a template: the navigation tree is recursive, and Liquid
+	// renders {% include %} with an empty context, so the tree is built in Go
+	// (see NavHTML) and the page template inlines the result.
+	TemplateList:     `{% for it in data.Items %}{{ it.Content }}{% endfor %}`,
+	TemplateMarkdown: `{{ data.Content }}`,
+	TemplateHTML:     `{{ data.Content }}`,
+	TemplateLink:     `{{ data.Content }}`,
+	TemplateBib:      `{{ data.Content }}`,
+	TemplateFile:     `<a href="{{ data.Root }}{{ data.Link }}">{% if data.Name %}{{ data.Name }}{% else %}{{ data.FileName }}{% endif %}</a>`,
 }
 
-var templateFuncs = template.FuncMap{
+// filterFuncs are the xdocc-specific Liquid filters, registered on top of the
+// standard set. Liquid has no arithmetic in {{ }}, so the numeric helpers a
+// template wants come from filters (plus, minus, modulo, divided_by) or these.
+var filterFuncs = map[string]any{
 	"base":       path.Base,
 	"dir":        path.Dir,
-	"date":       func(layout string, t time.Time) string { return t.Format(layout) },
-	"html":       func(s string) template.HTML { return template.HTML(s) },
+	"date":       func(t time.Time, layout string) string { return t.Format(layout) },
 	"join":       strings.Join,
-	"hasPrefix":  strings.HasPrefix,
-	"hasSuffix":  strings.HasSuffix,
-	"trimSuffix": strings.TrimSuffix,
-	"trimPrefix": strings.TrimPrefix,
+	"hasPrefix":  func(s string, p string) bool { return strings.HasPrefix(s, p) },
+	"hasSuffix":  func(s string, sfx string) bool { return strings.HasSuffix(s, sfx) },
+	"trimSuffix": func(s string, sfx string) string { return strings.TrimSuffix(s, sfx) },
+	"trimPrefix": func(s string, p string) string { return strings.TrimPrefix(s, p) },
 	"lower":      strings.ToLower,
 	"upper":      strings.ToUpper,
-	"replace":    strings.ReplaceAll,
+	"replace":    func(s string, old, new string) string { return strings.ReplaceAll(s, old, new) },
 }
 
 // Templates is the template set of a site: the built-in defaults, with the
 // files of .templates layered on top.
 type Templates struct {
-	tmpl    *template.Template
+	engine  *liquid.Engine
+	tmpls   map[string]*liquid.Template
 	Dir     string
 	ModTime time.Time // newest template file, for the cache
 }
 
 // LoadTemplates parses the built-in templates and everything in dir.
 func LoadTemplates(dir string) (*Templates, error) {
-	set := template.New("xdocc").Funcs(templateFuncs)
+	eng := liquid.NewEngine()
+	for name, fn := range filterFuncs {
+		eng.RegisterFilter(name, fn)
+	}
+	eng.RegisterTemplateStore(&liquidStore{dir: dir})
+	t := &Templates{engine: eng, tmpls: map[string]*liquid.Template{}, Dir: dir}
+
 	for name, text := range defaultTemplates {
-		if _, err := set.New(name).Parse(text); err != nil {
+		tmpl, err := eng.ParseTemplate([]byte(text))
+		if err != nil {
 			return nil, fmt.Errorf("built-in template %s: %w", name, err)
 		}
+		t.tmpls[name] = tmpl
 	}
-	t := &Templates{tmpl: set, Dir: dir}
 
 	entries, err := os.ReadDir(dir)
 	if os.IsNotExist(err) {
@@ -117,9 +127,11 @@ func LoadTemplates(dir string) (*Templates, error) {
 		if err != nil {
 			return nil, err
 		}
-		if _, err := set.New(entry.Name()).Parse(string(text)); err != nil {
+		tmpl, err := eng.ParseTemplate(text)
+		if err != nil {
 			return nil, fmt.Errorf("%s: %w", file, err)
 		}
+		t.tmpls[entry.Name()] = tmpl
 		if info, err := entry.Info(); err == nil && info.ModTime().After(t.ModTime) {
 			t.ModTime = info.ModTime()
 		}
@@ -128,13 +140,30 @@ func LoadTemplates(dir string) (*Templates, error) {
 }
 
 // Render executes a template and returns its output.
-func (t *Templates) Render(name string, data any) (template.HTML, error) {
-	var buf bytes.Buffer
-	if err := t.tmpl.ExecuteTemplate(&buf, name, data); err != nil {
+func (t *Templates) Render(name string, data any) (string, error) {
+	tmpl, ok := t.tmpls[name]
+	if !ok {
+		return "", fmt.Errorf("template %s: not found", name)
+	}
+	out, err := tmpl.Render(liquid.Bindings{"data": data})
+	if err != nil {
 		return "", fmt.Errorf("template %s: %w", name, err)
 	}
-	return template.HTML(buf.String()), nil
+	return string(out), nil
 }
 
 // Has reports whether a template of that name exists.
-func (t *Templates) Has(name string) bool { return t.tmpl.Lookup(name) != nil }
+func (t *Templates) Has(name string) bool { _, ok := t.tmpls[name]; return ok }
+
+// liquidStore resolves {% include %} to a file in the site's .templates dir.
+// The engine renders includes with an empty context, so xdocc templates do not
+// use them; the store is here so a stray include fails against the site dir
+// rather than the working directory.
+type liquidStore struct{ dir string }
+
+func (s *liquidStore) ReadTemplate(filename string) ([]byte, error) {
+	if filepath.IsAbs(filename) {
+		return nil, fmt.Errorf("absolute include %s", filename)
+	}
+	return os.ReadFile(filepath.Join(s.dir, filename))
+}

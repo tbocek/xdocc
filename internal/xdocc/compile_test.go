@@ -85,13 +85,13 @@ func (b *build) want(name, content string) {
 }
 
 // listing prints the url of every item, which is what most tests check.
-const listTemplate = `{{ range .Items }}[{{ .URL }}]{{ end }}`
+const listTemplate = `{% for x in data.Items %}[{{ x.URL }}]{% endfor %}`
 
 func TestCompileBasics(t *testing.T) {
 	b := newBuild(t, map[string]string{
-		".templates/page.html":     `{{ .Content }}`,
+		".templates/page.html":     `{{ data.Content }}`,
 		".templates/list.html":     listTemplate,
-		".templates/markdown.html": `({{ .Content }})`,
+		".templates/markdown.html": `({{ data.Content }})`,
 		"1-intro.md":               "hello **world**",
 		"2-about[About us].md":     "about",
 		"logo.svg":                 "<svg/>",
@@ -106,7 +106,7 @@ func TestCompileBasics(t *testing.T) {
 
 func TestCompileOrderAndSort(t *testing.T) {
 	b := newBuild(t, map[string]string{
-		".templates/page.html": `{{ .Content }}`,
+		".templates/page.html": `{{ data.Content }}`,
 		".templates/list.html": listTemplate,
 		"2-b.md":               "b",
 		"1-a.md":               "a",
@@ -118,7 +118,7 @@ func TestCompileOrderAndSort(t *testing.T) {
 
 	// dates sort newest first
 	b2 := newBuild(t, map[string]string{
-		".templates/page.html": `{{ .Content }}`,
+		".templates/page.html": `{{ data.Content }}`,
 		".templates/list.html": listTemplate,
 		"2024-01-01-old.md":    "old",
 		"2025-06-02-new.md":    "new",
@@ -129,7 +129,7 @@ func TestCompileOrderAndSort(t *testing.T) {
 
 	// an explicit sort wins
 	b3 := newBuild(t, map[string]string{
-		".templates/page.html": `{{ .Content }}`,
+		".templates/page.html": `{{ data.Content }}`,
 		".templates/list.html": listTemplate,
 		".xdocc":               "sort: desc\n",
 		"1-a.md":               "a",
@@ -141,7 +141,7 @@ func TestCompileOrderAndSort(t *testing.T) {
 
 func TestCompileAssetsAndVisible(t *testing.T) {
 	b := newBuild(t, map[string]string{
-		".templates/page.html": `{{ .Content }}`,
+		".templates/page.html": `{{ data.Content }}`,
 		".templates/list.html": listTemplate,
 		"1-photo.jpg":          "binary",
 		"untouched.txt":        "as is",
@@ -163,9 +163,9 @@ func TestCompileAssetsAndVisible(t *testing.T) {
 
 func TestCompileIndexItem(t *testing.T) {
 	b := newBuild(t, map[string]string{
-		".templates/page.html":     `[{{ .Content }}]`,
+		".templates/page.html":     `[{% if data.Content %}{{ data.Content }}{% endif %}]`,
 		".templates/list.html":     listTemplate,
-		".templates/markdown.html": `{{ .Content }}`,
+		".templates/markdown.html": `{{ data.Content }}`,
 		"1-index.md":               "the page itself",
 		"2-other.md":               "other",
 	})
@@ -179,7 +179,7 @@ func TestCompileIndexItem(t *testing.T) {
 	// an order with no url after it - "7-.md" - is not a name xdocc reads, so
 	// the file is passed through and the listing is generated as usual
 	b2 := newBuild(t, map[string]string{
-		".templates/page.html": `[{{ .Content }}]`,
+		".templates/page.html": `[{% if data.Content %}{{ data.Content }}{% endif %}]`,
 		".templates/list.html": listTemplate,
 		"7-.md":                "empty url",
 	})
@@ -188,9 +188,43 @@ func TestCompileIndexItem(t *testing.T) {
 	b2.want("index.html", "[]")
 }
 
+func TestCompileNolist(t *testing.T) {
+	b := newBuild(t, map[string]string{
+		".templates/page.html":     `{{ data.Content }}`,
+		".templates/list.html":     listTemplate,
+		".templates/markdown.html": `[{{ data.URL }}]`,
+		".templates/link.html":     `({{ data.Content }})`,
+		"1-pull.link":              "url=a/*\n",
+		"1-a[A]/0-x|nolist.md":     "hidden from both",
+		"1-a[A]/1-o|linkonly.md":   "links only",
+		"1-a[A]/2-y.md":            "visible",
+		"2-sib[Sib]/1-c.md":        "sib",
+	})
+	b.compile()
+	// the generated listing skips nolist and linkonly items alike
+	b.want("a/index.html", "[a/y.html]")
+	// a .link skips nolist items but pulls linkonly ones in
+	b.want("pull.html", "([a/o.html][a/y.html])")
+	// both are structural, not inherited: a sibling dir without them still lists
+	b.want("index.html", "[a/index.html][pull.html][sib/index.html]")
+	b.want("sib/index.html", "[sib/c.html]")
+
+	// an explicit .link name does not pull a nolist item either
+	b2 := newBuild(t, map[string]string{
+		".templates/page.html":     `{{ data.Content }}`,
+		".templates/list.html":     listTemplate,
+		".templates/markdown.html": `[{{ data.URL }}]`,
+		".templates/link.html":     `({{ data.Content }})`,
+		"1-pull.link":              "url=a/x\n",
+		"1-a[A]/0-x|nolist.md":     "hidden",
+	})
+	b2.compile()
+	b2.want("pull.html", "()")
+}
+
 func TestCompileSplit(t *testing.T) {
 	b := newBuild(t, map[string]string{
-		".templates/page.html": `{{ .Content }}`,
+		".templates/page.html": `{{ data.Content }}`,
 		".templates/list.html": listTemplate,
 		"1-news/.xdocc":        "nosplit\n",
 		"1-news/1-a.md":        "a",
@@ -204,7 +238,7 @@ func TestCompileSplit(t *testing.T) {
 
 	// a single item can opt out
 	b2 := newBuild(t, map[string]string{
-		".templates/page.html": `{{ .Content }}`,
+		".templates/page.html": `{{ data.Content }}`,
 		".templates/list.html": listTemplate,
 		"1-a|nosplit.md":       "a",
 		"2-b.md":               "b",
@@ -221,8 +255,8 @@ func TestCompileSplit(t *testing.T) {
 
 func TestCompileHiddenAndFrontmatter(t *testing.T) {
 	b := newBuild(t, map[string]string{
-		".templates/page.html": `{{ .Content }}`,
-		".templates/list.html": `{{ range .Items }}[{{ .Name }}|{{ date "2006-01-02" .Date }}]{{ end }}`,
+		".templates/page.html": `{{ data.Content }}`,
+		".templates/list.html": `{% for x in data.Items %}[{{ x.Name }}|{{ x.Date | date: "2006-01-02" }}]{% endfor %}`,
 		"2025-06-02-a.md":      "---\nname: From front matter\n---\ntext\n",
 		".hidden.md":           "invisible",
 		"1-b.md~":              "invisible",
@@ -240,7 +274,7 @@ func TestCompileHiddenAndFrontmatter(t *testing.T) {
 
 func TestCompileSubstitution(t *testing.T) {
 	b := newBuild(t, map[string]string{
-		".templates/page.html": `{{ .Content }}`,
+		".templates/page.html": `{{ data.Content }}`,
 		"1-dir/1-a.md":         "name=${name} url=${url} root=${root} nr=${nr}",
 	})
 	b.compile()
@@ -249,7 +283,7 @@ func TestCompileSubstitution(t *testing.T) {
 
 func TestCompileDeleteStaleOutput(t *testing.T) {
 	b := newBuild(t, map[string]string{
-		".templates/page.html": `{{ .Content }}`,
+		".templates/page.html": `{{ data.Content }}`,
 		"1-a.md":               "a",
 		"2-b.md":               "b",
 	})
@@ -269,7 +303,7 @@ func TestCompileDeleteStaleOutput(t *testing.T) {
 
 func TestCompileCacheReusesRenderedContent(t *testing.T) {
 	b := newBuild(t, map[string]string{
-		".templates/page.html": `{{ .Content }}`,
+		".templates/page.html": `{{ data.Content }}`,
 		"1-a.md":               "a",
 		"2-b.md":               "b",
 	})
@@ -287,7 +321,7 @@ func TestCompileCacheReusesRenderedContent(t *testing.T) {
 
 func TestCompileHiddenDirectory(t *testing.T) {
 	b := newBuild(t, map[string]string{
-		".templates/page.html": `{{ .Content }}`,
+		".templates/page.html": `{{ data.Content }}`,
 		".templates/list.html": listTemplate,
 		"1-a.md":               "a",
 		".draft/1-b.md":        "b",
@@ -307,7 +341,7 @@ func TestCompileHiddenDirectory(t *testing.T) {
 // word.
 func TestCompileLegacyPropertiesAreIgnored(t *testing.T) {
 	b := newBuild(t, map[string]string{
-		".templates/page.html":    `{{ .Content }}`,
+		".templates/page.html":    `{{ data.Content }}`,
 		".templates/list.html":    listTemplate,
 		".xdocc":                  "visible\n",
 		"0-shown|hidden.md":       "still here",
@@ -338,7 +372,7 @@ func TestCompileLegacyPropertiesAreIgnored(t *testing.T) {
 
 func TestCompileHTMLHandler(t *testing.T) {
 	b := newBuild(t, map[string]string{
-		".templates/page.html": `{{ .Content }}`,
+		".templates/page.html": `{{ data.Content }}`,
 		"1-a.html":             "<html><head><title>x</title></head><body><p>only this</p></body></html>",
 		"2-b.htm":              "<p>no body tag</p>",
 	})
@@ -349,7 +383,7 @@ func TestCompileHTMLHandler(t *testing.T) {
 
 func TestCompileStackedExtensions(t *testing.T) {
 	b := newBuild(t, map[string]string{
-		".templates/page.html": `{{ .Content }}`,
+		".templates/page.html": `{{ data.Content }}`,
 		"1-recipe.link.md":     "# markdown after all",
 	})
 	b.compile()
@@ -359,7 +393,7 @@ func TestCompileStackedExtensions(t *testing.T) {
 func TestCompileDuplicateURLsAreReported(t *testing.T) {
 	// two sources that produce the same output file
 	b := newBuild(t, map[string]string{
-		".templates/page.html": `{{ .Content }}`,
+		".templates/page.html": `{{ data.Content }}`,
 		"1-a.md":               "one",
 		"2-a.md":               "two",
 	})
@@ -374,7 +408,7 @@ func TestCompileDuplicateURLsAreReported(t *testing.T) {
 func TestCompilePassthroughSubtree(t *testing.T) {
 	const page = "<html><head><title>Demo</title></head><body>hi</body></html>"
 	b := newBuild(t, map[string]string{
-		".templates/page.html": `[{{ .Content }}]`,
+		".templates/page.html": `[{% if data.Content %}{{ data.Content }}{% endif %}]`,
 		".templates/list.html": listTemplate,
 		".xdocc":               "nosplit\n",
 		"1-a.md":               "a",
@@ -402,9 +436,9 @@ func TestCompilePassthroughSubtree(t *testing.T) {
 // material carries a written introduction without being ordered itself.
 func TestCompileIndexItemInPassthroughDir(t *testing.T) {
 	b := newBuild(t, map[string]string{
-		".templates/page.html":           `[{{ .Content }}]`,
+		".templates/page.html":           `[{% if data.Content %}{{ data.Content }}{% endif %}]`,
 		".templates/list.html":           listTemplate,
-		".templates/markdown.html":       `{{ .Content }}`,
+		".templates/markdown.html":       `{{ data.Content }}`,
 		"1-a.md":                         "a",
 		"fs25/2025-02-17-index[FS25].md": "# FS25",
 		"fs25/slides.pdf":                "%PDF",
@@ -416,24 +450,115 @@ func TestCompileIndexItemInPassthroughDir(t *testing.T) {
 	b.want("index.html", "[[a.html]]")
 }
 
+func TestCompileListTemplateSelection(t *testing.T) {
+	// a directory's own layout property picks a list-<value>.html file
+	b := newBuild(t, map[string]string{
+		".templates/page.html":      `{{ data.Content }}`,
+		".templates/list.html":      listTemplate,
+		".templates/list-root.html": "[ROOT]",
+		".xdocc":                    "nosplit\nlayout: root\n",
+		"1-a.md":                    "a",
+		"2-b.md":                    "b",
+		"3-c/1-d.md":                "d",
+	})
+	b.compile()
+	b.want("index.html", "[ROOT]")
+	b.want("c/index.html", "[c/d.html]")
+
+	// the property can live in a directory's name
+	b2 := newBuild(t, map[string]string{
+		".templates/page.html":       `{{ data.Content }}`,
+		".templates/list.html":       listTemplate,
+		".templates/list-other.html": "[OTHER]",
+		"1-a.md":                     "a",
+		"2-b/1-c.md":                 "c",
+		"3-d|layout=other/1-e.md":    "e",
+	})
+	b2.compile()
+	b2.want("b/index.html", "[b/c.html]")
+	b2.want("d/index.html", "[OTHER]")
+
+	// an inherited layout does not select a list template: only what a
+	// directory sets for itself does
+	b3 := newBuild(t, map[string]string{
+		".templates/page.html":      `{{ data.Content }}`,
+		".templates/list.html":      listTemplate,
+		".templates/list-root.html": "[ROOT]",
+		".xdocc":                    "layout: root\n",
+		"1-a.md":                    "a",
+		"3-s/1-t.md":                "t",
+	})
+	b3.compile()
+	b3.want("index.html", "[ROOT]")
+	b3.want("s/index.html", "[s/t.html]")
+
+	// a directory's own .xdocc selects for that directory only
+	b4 := newBuild(t, map[string]string{
+		".templates/page.html":       `{{ data.Content }}`,
+		".templates/list.html":       listTemplate,
+		".templates/list-other.html": "[OTHER]",
+		"1-a.md":                     "a",
+		"3-s/.xdocc":                 "layout: other\n",
+		"3-s/1-t.md":                 "t",
+	})
+	b4.compile()
+	b4.want("index.html", "[a.html][s/index.html]")
+	b4.want("s/index.html", "[OTHER]")
+
+	// a missing file falls back to list.html without an error
+	b5 := newBuild(t, map[string]string{
+		".templates/page.html": `{{ data.Content }}`,
+		".templates/list.html": listTemplate,
+		".xdocc":               "layout: nope\n",
+		"1-a.md":               "a",
+	})
+	b5.compile()
+	b5.want("index.html", "[a.html]")
+}
+
+func TestCompileTemplateArithmetic(t *testing.T) {
+	b := newBuild(t, map[string]string{
+		".templates/page.html": `{{ data.Content }}`,
+		".templates/list.html": `{{ 1 | plus: 2 }}{{ 5 | minus: 3 }}{{ 5 | modulo: 2 }}`,
+		"1-a.md":               "a",
+	})
+	b.compile()
+	b.want("index.html", "321")
+}
+
 // Symlinking is the default, so a tree whose weight is in its files costs
 // almost nothing to generate. Only the root .xdocc turns it off.
 func TestCompileSymlinkIsTheDefault(t *testing.T) {
 	b := newBuild(t, map[string]string{
-		".templates/page.html": `{{ .Content }}`,
+		".templates/page.html": `{{ data.Content }}`,
 		"1-a.md":               "a",
 		"logo.svg":             "<svg/>",
+		"deep/nested/logo.png": "x",
 	})
 	b.compile()
 	link, err := os.Readlink(filepath.Join(b.gen, "logo.svg"))
 	if err != nil {
 		t.Fatalf("logo.svg is not a symlink: %v", err)
 	}
-	if want := filepath.Join(b.src, "logo.svg"); link != want {
+	// the link is relative, so the output tree survives being moved
+	if filepath.IsAbs(link) {
+		t.Errorf("logo.svg points at the absolute path %q", link)
+	}
+	if want, _ := filepath.Rel(b.gen, filepath.Join(b.src, "logo.svg")); link != want {
 		t.Errorf("logo.svg points at %q, want %q", link, want)
 	}
 	// it still reads as the file it points at
 	b.want("logo.svg", "<svg/>")
+
+	// a nested asset is relative to its own place in the output tree
+	link, err = os.Readlink(filepath.Join(b.gen, "deep/nested/logo.png"))
+	if err != nil {
+		t.Fatalf("deep/nested/logo.png is not a symlink: %v", err)
+	}
+	if want, _ := filepath.Rel(filepath.Join(b.gen, "deep/nested"), filepath.Join(b.src, "deep/nested/logo.png")); link != want {
+		t.Errorf("deep/nested/logo.png points at %q, want %q", link, want)
+	}
+	b.want("deep/nested/logo.png", "x")
 	// a generated page is a real file, never a link
 	if info, err := os.Lstat(filepath.Join(b.gen, "a.html")); err != nil {
 		t.Fatal(err)
@@ -444,7 +569,7 @@ func TestCompileSymlinkIsTheDefault(t *testing.T) {
 
 func TestCompileSymlinkOff(t *testing.T) {
 	b := newBuild(t, map[string]string{
-		".templates/page.html": `{{ .Content }}`,
+		".templates/page.html": `{{ data.Content }}`,
 		".xdocc":               "symlink: false\n",
 		"logo.svg":             "<svg/>",
 	})
@@ -463,7 +588,7 @@ func TestCompileSymlinkOff(t *testing.T) {
 // in both directions.
 func TestCompileSymlinkSwitchesBothWays(t *testing.T) {
 	b := newBuild(t, map[string]string{
-		".templates/page.html": `{{ .Content }}`,
+		".templates/page.html": `{{ data.Content }}`,
 		".xdocc":               "symlink: false\n",
 		"logo.svg":             "<svg/>",
 	})

@@ -24,6 +24,9 @@ type Item struct {
 	// settings holds the properties this directory passes down to everything
 	// below it.
 	settings Props
+	// self holds what the directory itself says — its name and its own .xdocc,
+	// before anything is inherited from above.
+	self Props
 
 	Name string    // display name
 	URL  string    // path from the site root, e.g. "docs/about.html"
@@ -83,6 +86,23 @@ func (i *Item) Split() bool {
 	// and has nothing to put on a page of its own, so it does not ask for one
 	// unless the filename says otherwise.
 	return i.name.Handler != HandlerBib
+}
+
+// Nolist reports whether the item keeps itself out of its parent directory's
+// generated listing and out of .link pulls alike: it never shows up on its
+// own. LinkOnly is the counterpart - out of the listing, but still pulled in
+// by .link files.
+func (i *Item) Nolist() bool {
+	v, ok := i.Props.Bool(PropNolist)
+	return ok && v
+}
+
+// LinkOnly reports whether the item stays out of its parent directory's
+// generated listing but is still pulled in by .link files: it shows only
+// where it is explicitly linked.
+func (i *Item) LinkOnly() bool {
+	v, ok := i.Props.Bool(PropLinkOnly)
+	return ok && v
 }
 
 // Layout is the free-form layout hint handed to templates.
@@ -273,6 +293,9 @@ func (s *Site) newDir(dir string, parent *Item) (*Item, error) {
 	item.Props = Props{}
 	item.Props.merge(item.name.Props, false)
 	item.Props.merge(own, false)
+	item.self = Props{}
+	item.self.merge(item.name.Props, false)
+	item.self.merge(own, false)
 	if parent != nil {
 		item.Props.merge(parent.settings, true)
 	}

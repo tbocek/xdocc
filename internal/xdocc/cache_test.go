@@ -22,16 +22,16 @@ func warm(t *testing.T, files map[string]string) (*build, func()) {
 
 // contentListing shows what each listed item renders to, so a stale listing is
 // visible and not just a stale link.
-const contentListing = `{{ range .Items }}[{{ .URL }}:{{ .Content }}]{{ end }}`
+const contentListing = `{% for x in data.Items %}[{{ x.URL }}:{{ x.Content }}]{% endfor %}`
 
 // A .link pulls items out of another directory, so a page can go stale because
 // of a file it does not contain. Nothing about that is cached.
 func TestCacheInvalidatesLinkSource(t *testing.T) {
 	b, run := warm(t, map[string]string{
-		".templates/page.html":     `{{ .Content }}`,
+		".templates/page.html":     `{{ data.Content }}`,
 		".templates/list.html":     contentListing,
-		".templates/markdown.html": `{{ .Content }}`,
-		".templates/link.html":     `{{ .Content }}`,
+		".templates/markdown.html": `{{ data.Content }}`,
+		".templates/link.html":     `{{ data.Content }}`,
 		"1-pull.link":              "url=news/*\n",
 		"2-news/1-a.md":            "one",
 	})
@@ -64,9 +64,9 @@ func TestCacheInvalidatesLinkSource(t *testing.T) {
 
 func TestCacheInvalidatesOnXdoccChange(t *testing.T) {
 	b, run := warm(t, map[string]string{
-		".templates/page.html":     `{{ .Content }}`,
-		".templates/list.html":     `{{ range .Items }}[{{ .URL }}]{{ end }}`,
-		".templates/markdown.html": `{{ .Content }}`,
+		".templates/page.html":     `{{ data.Content }}`,
+		".templates/list.html":     `{% for x in data.Items %}[{{ x.URL }}]{% endfor %}`,
+		".templates/markdown.html": `{{ data.Content }}`,
 		"1-a.md":                   "one",
 		"2-b.md":                   "two",
 	})
@@ -86,9 +86,9 @@ func TestCacheInvalidatesOnXdoccChange(t *testing.T) {
 
 func TestCacheInvalidatesOnFrontmatterChange(t *testing.T) {
 	b, run := warm(t, map[string]string{
-		".templates/page.html":     `{{ .Content }}`,
-		".templates/list.html":     `{{ range .Items }}[{{ .Name }}]{{ end }}`,
-		".templates/markdown.html": `{{ .Content }}`,
+		".templates/page.html":     `{{ data.Content }}`,
+		".templates/list.html":     `{% for x in data.Items %}[{{ x.Name }}]{% endfor %}`,
+		".templates/markdown.html": `{{ data.Content }}`,
 		"1-a.md":                   "---\nname: First\n---\none\n",
 	})
 	run()
@@ -101,9 +101,9 @@ func TestCacheInvalidatesOnFrontmatterChange(t *testing.T) {
 
 func TestCacheInvalidatesOnTemplateChange(t *testing.T) {
 	b, run := warm(t, map[string]string{
-		".templates/page.html":     `{{ .Content }}`,
-		".templates/list.html":     `{{ range .Items }}[{{ .URL }}]{{ end }}`,
-		".templates/markdown.html": `{{ .Content }}`,
+		".templates/page.html":     `{{ data.Content }}`,
+		".templates/list.html":     `{% for x in data.Items %}[{{ x.URL }}]{% endfor %}`,
+		".templates/markdown.html": `{{ data.Content }}`,
 		"1-a.md":                   "one",
 	})
 	run()
@@ -111,8 +111,8 @@ func TestCacheInvalidatesOnTemplateChange(t *testing.T) {
 	b.want("a.html", "<p>one</p>")
 
 	// templates are never cached, so a change to one reaches every page
-	b.file(".templates/list.html", `{{ range .Items }}({{ .URL }}){{ end }}`)
-	b.file(".templates/markdown.html", `<div>{{ .Content }}</div>`)
+	b.file(".templates/list.html", `{% for x in data.Items %}({{ x.URL }}){% endfor %}`)
+	b.file(".templates/markdown.html", `<div>{{ data.Content }}</div>`)
 	run()
 	b.want("index.html", "(a.html)")
 	b.want("a.html", "<div><p>one</p></div>")
@@ -120,9 +120,9 @@ func TestCacheInvalidatesOnTemplateChange(t *testing.T) {
 
 func TestCacheRenameRemovesOldPage(t *testing.T) {
 	b, run := warm(t, map[string]string{
-		".templates/page.html":     `{{ .Content }}`,
-		".templates/list.html":     `{{ range .Items }}[{{ .URL }}]{{ end }}`,
-		".templates/markdown.html": `{{ .Content }}`,
+		".templates/page.html":     `{{ data.Content }}`,
+		".templates/list.html":     `{% for x in data.Items %}[{{ x.URL }}]{% endfor %}`,
+		".templates/markdown.html": `{{ data.Content }}`,
 		"1-a.md":                   "one",
 	})
 	run()
@@ -139,8 +139,8 @@ func TestCacheRenameRemovesOldPage(t *testing.T) {
 
 func TestCacheIgnoresTimestamps(t *testing.T) {
 	b, run := warm(t, map[string]string{
-		".templates/page.html":     `{{ .Content }}`,
-		".templates/markdown.html": `{{ .Content }}`,
+		".templates/page.html":     `{{ data.Content }}`,
+		".templates/markdown.html": `{{ data.Content }}`,
 		"1-a.md":                   "one",
 	})
 	run()

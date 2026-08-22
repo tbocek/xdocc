@@ -22,8 +22,8 @@ const maxLinkDepth = 10
 type Data struct {
 	*Item
 
-	Root    string        // relative path from the page being rendered to the site root
-	Content template.HTML // the item, or the listing, as HTML
+	Root    string // relative path from the page being rendered to the site root
+	Content string // the item, or the listing, as HTML
 
 	Items      []*Data          // the items of a listing
 	ItemsByURL map[string]*Data // the same items, keyed by output file name
@@ -31,6 +31,37 @@ type Data struct {
 	GlobalNav  []*Nav
 	CurrentNav *Nav
 	Breadcrumb []*Nav
+}
+
+// NavHTML renders the navigation tree as HTML. Liquid renders {% include %}
+// with an empty context, so the recursive tree cannot be a template; it is
+// built here and the page template inlines the result.
+func (d *Data) NavHTML() string {
+	var out strings.Builder
+	var walk func(nodes []*Nav)
+	walk = func(nodes []*Nav) {
+		out.WriteString("<ul>")
+		for _, n := range nodes {
+			cls := ""
+			if n.Active {
+				cls = ` class="active"`
+			}
+			out.WriteString("<li><a href=\"")
+			out.WriteString(n.Href)
+			out.WriteString("\"")
+			out.WriteString(cls)
+			out.WriteString(">")
+			out.WriteString(n.Name)
+			out.WriteString("</a>")
+			if n.Children != nil {
+				walk(n.Children)
+			}
+			out.WriteString("</li>")
+		}
+		out.WriteString("</ul>")
+	}
+	walk(d.GlobalNav)
+	return out.String()
 }
 
 // compiler holds the state of one compilation run.
@@ -78,7 +109,7 @@ func (c *compiler) compileDir(dir *Item) error {
 			if err := c.compileDir(child); err != nil {
 				return err
 			}
-			if child.isContent() {
+			if child.isContent() && !child.Nolist() && !child.LinkOnly() {
 				data, err := c.render(child, dir, 0)
 				if err != nil {
 					return err
@@ -104,7 +135,7 @@ func (c *compiler) compileDir(dir *Item) error {
 			index = data
 			continue
 		}
-		if child.isContent() {
+		if child.isContent() && !child.Nolist() && !child.LinkOnly() {
 			items = append(items, data)
 		}
 		if child.IsTransformed() && child.Split() && dir.Split() {
@@ -143,7 +174,18 @@ func (c *compiler) listing(dir *Item, items []*Data) (*Data, error) {
 	for _, item := range items {
 		data.ItemsByURL[path.Base(item.URL)] = item
 	}
-	content, err := c.site.templates.Render(TemplateList, data)
+	// a directory picks its list template from its OWN layout property — the
+	// one set in its name or its own .xdocc, not an inherited one:
+	// "layout: root" renders list-root.html. Only self-set values are read,
+	// because layout is inherited and a root .xdocc would otherwise make every
+	// section's listing use the root's list template.
+	name := TemplateList
+	if v := dir.self[PropLayout]; v != "" {
+		if alt := "list-" + v + ".html"; c.site.templates.Has(alt) {
+			name = alt
+		}
+	}
+	content, err := c.site.templates.Render(name, data)
 	if err != nil {
 		return nil, err
 	}
@@ -159,7 +201,7 @@ func (c *compiler) render(item, page *Item, depth int) (*Data, error) {
 	if err != nil {
 		return nil, err
 	}
-	data.Content = template.HTML(substitute(string(raw), item, data.Root))
+	data.Content = substitute(string(raw), item, data.Root)
 	rendered, err := c.site.templates.Render(handlerTemplate[item.Handler()], data)
 	if err != nil {
 		return nil, err
@@ -217,10 +259,17 @@ func (c *compiler) link(item, page *Item, depth int) (template.HTML, error) {
 	}
 	var out strings.Builder
 	for _, target := range pulled {
+		// nolist skips .link pulls too; linkonly is the listing-only counterpart
+		if target.Nolist() {
+			continue
+		}
 		if target.IsDir {
 			// a directory is pulled in as its own listing
 			var items []*Data
 			for _, child := range target.ContentItems() {
+				if child.Nolist() {
+					continue
+				}
 				data, err := c.render(child, page, depth+1)
 				if err != nil {
 					return "", err
@@ -328,13 +377,19 @@ func (c *compiler) copyAsset(item *Item) error {
 		return err
 	}
 	if c.site.Symlink() && !c.noSymlink {
-		if link, err := os.Readlink(target); err == nil && link == item.Source {
+		// a relative link keeps working when the output tree is moved; an
+		// absolute one (a different volume on Windows) is left as is
+		link := item.Source
+		if rel, err := filepath.Rel(filepath.Dir(target), item.Source); err == nil && !filepath.IsAbs(rel) {
+			link = path.Join(strings.Split(rel, string(os.PathSeparator))...)
+		}
+		if old, err := os.Readlink(target); err == nil && old == link {
 			return nil
 		}
 		if err := os.RemoveAll(target); err != nil {
 			return err
 		}
-		if err := os.Symlink(item.Source, target); err == nil {
+		if err := os.Symlink(link, target); err == nil {
 			c.written++
 			return nil
 		} else {

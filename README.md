@@ -233,13 +233,15 @@ place it decides the sort order as well.
 |---|---|---|---|
 | `nav` | flag | directory | include in the navigation tree |
 | `name` | text | any | display name |
+| `nolist` | flag | directory or item | exclude from the parent directory's generated listing and from `.link` pulls alike |
+| `linkonly` | flag | directory or item | exclude from the parent directory's generated listing; `.link` files still pull it in — it shows only where it is explicitly linked |
 | `split` | bool, default `true` | directory or item | `false`: no page of its own — the item appears only inside its directory's `index.html`. On a directory it speaks for the items directly inside it and reaches no deeper, so `nosplit` in the root `.xdocc` folds the front page together without flattening the sections below it |
 
 ### Settings — inherited down the tree
 
 | Property | Value | Default | Meaning |
 |---|---|---|---|
-| `layout` | text | — | free-form string handed to templates as `.Layout`; templates decide what it means |
+| `layout` | text | — | free-form string handed to templates as `.Layout`; templates decide what it means. Set on a directory itself — in its name or its `.xdocc`, not merely inherited — it also selects the list template: the listing renders with `list-<value>.html` if that file is in `.templates`. `layout: root` in the root `.xdocc` gives the front page its own list |
 | `sort` | `auto`, `asc`, `desc` | `auto` | `auto` sorts dated items newest first and numbered items ascending |
 
 ### Site settings — root `.xdocc`
@@ -252,8 +254,10 @@ Assets are symlinked by default. A site whose weight is in its files — a lectu
 folder full of video, a directory of PDFs — is then generated in milliseconds and
 takes no second copy of the disk. Set `symlink: false` in the root `.xdocc` if the
 output is handed to something that cannot follow a link pointing out of the output
-tree. Where the file system has no symlinks at all, xdocc says so once and copies
-instead, so this is a preference and not a promise.
+tree. Links are relative, so the output tree may be moved as long as its position
+relative to the source stays the same; to ship it standalone, dereference the links
+while copying (`rsync -aL`). Where the file system has no symlinks at all, xdocc
+says so once and copies instead, so this is a preference and not a promise.
 
 ### Legacy spellings
 
@@ -368,9 +372,11 @@ file (section 6).
 
 ## 8. Templates
 
-Go templates in `.templates/`. Built-in defaults exist for all of them, so you only add
-the ones you want to override. Any other `.html` file in that directory can be called
-with `{{ template "name.html" . }}`.
+Liquid templates in `.templates/` — `{{ }}` for output, `{% %}` for blocks
+(`{% if %}`, `{% for %}` with `forloop.index0`/`first`/`last`). Built-in defaults
+exist for all of them, so you only add the ones you want to override. The data
+structure is bound as `data`, so fields are `data.Name`, `data.Content`, …; inside
+a `{% for x in data.Items %}` loop, the item is `x`.
 
 | Template | Renders |
 |---|---|
@@ -381,36 +387,43 @@ with `{{ template "name.html" . }}`.
 | `link.html` | the result of a `.link` file |
 | `bib.html` | the citations of a `.bib` file |
 | `file.html` | one asset or subdirectory shown in a listing — anything a listing links to rather than shows |
-| `nav.html` | a navigation tree, called with a list of navigation entries |
 
-Available in every template:
+The navigation tree is not a template: it is recursive, and Liquid renders includes
+with an empty context, so xdocc builds it in Go and the page template inlines it as
+`{{ data.NavHTML }}`.
+
+Available in every template (bound as `data`):
 
 | | |
 |---|---|
-| item | `.Name` `.URL` `.Link` `.Content` `.Date` `.Nr` `.Layout` `.Props` `.FileName` `.FileSize` `.Ext` `.Depth` |
-| listing | `.Items` `.ItemsByURL` |
-| navigation | `.GlobalNav` `.CurrentNav` `.Breadcrumb` |
-| paths | `.Root` — the way back to the site root from the page being rendered, `""` or `"../../"` |
-| flags | `.IsDir` `.IsIndex` `.IsNav` `.IsTransformed` `.Split` |
+| item | `data.Name` `data.URL` `data.Link` `data.Content` `data.Date` `data.Nr` `data.Layout` `data.FileName` `data.FileSize` |
+| listing | `data.Items` `data.ItemsByURL` |
+| navigation | `data.GlobalNav` `data.CurrentNav` `data.Breadcrumb` |
+| paths | `data.Root` — the way back to the site root from the page being rendered, `""` or `"../../"` |
+| flags | `data.IsDir` `data.IsIndex` `data.IsNav` `data.IsTransformed` `data.Split` |
 
-`.URL` is the file an item produces, relative to the site root (`docs/about.html`);
-`.Link` is where to link to it, which differs only for items that do not split. Write
-links as `{{ .Root }}{{ .Link }}`.
+`data.URL` is the file an item produces, relative to the site root
+(`docs/about.html`); `data.Link` is where to link to it, which differs only for
+items that do not split. Write links as `{{ data.Root }}{{ data.Link }}`.
 
 A navigation entry has `.Name`, `.Path` (`docs/api`), `.URL` (`docs/api/index.html`),
 `.Href` (ready to use in the page being rendered), `.Active` (the current page is in
 this directory or below it), `.Current` and `.Children`.
 
-`.ItemsByURL` keys the current listing by output file name, which lets a front page
-place specific pieces rather than listing them:
+`data.ItemsByURL` keys the current listing by output file name, which lets a front
+page place specific pieces rather than listing them:
 
-```gotemplate
-{{ (index .ItemsByURL "intro.html").Content }}
-{{ (index .ItemsByURL "news.html").Content }}
+```liquid
+{{ data.ItemsByURL["intro.html"].Content }}
+{{ data.ItemsByURL["news.html"].Content }}
 ```
 
-Besides the standard ones, these functions are available: `base` `dir` `date` `html`
-`join` `lower` `upper` `replace` `hasPrefix` `hasSuffix` `trimPrefix` `trimSuffix`.
+Liquid has no arithmetic in `{{ }}` — use the standard filters `plus`, `minus`,
+`modulo`, `divided_by` (and note that filters cannot appear inside `{% if %}`
+conditions; precompute with `{% assign %}`). Besides the standard ones, these
+filters are available: `base` `dir` `date` (Go layout string, e.g.
+`{{ data.Date | date: "2006-01-02" }}`) `join` `lower` `upper` `replace`
+`hasPrefix` `hasSuffix` `trimPrefix` `trimSuffix`.
 
 ### Substitution inside content
 
@@ -526,7 +539,7 @@ serves.
 Ported to Go from the Java implementation that still powers
 [dsl.i.ost.ch](https://dsl.i.ost.ch/); its sources are kept under `old/` for reference,
 together with the site itself under `old/site`, whose Freemarker templates have been
-translated to Go templates next to the originals.
+translated to Liquid templates next to the originals.
 
 The Go version drops what the Java version accumulated: wikitext, pandoc and external
 command handlers, the image pipeline, and about half of the properties.

@@ -267,8 +267,8 @@ func TestRenderBibEscapesHTML(t *testing.T) {
 // publication list of a site is many files under one url.
 func TestCompileBib(t *testing.T) {
 	b := newBuild(t, map[string]string{
-		".templates/page.html": `{{ .Content }}`,
-		".templates/list.html": `{{ range .Items }}<h1>{{ .Name }}</h1>{{ .Content }}{{ end }}`,
+		".templates/page.html": `{{ data.Content }}`,
+		".templates/list.html": `{% for x in data.Items %}<h1>{{ x.Name }}</h1>{{ x.Content }}{% endfor %}`,
 		"2023-pub[2023].bib":   `@misc{a, author = {Bocek, Thomas}, title = {Older}, year = {2023}}`,
 		"2024-pub[2024].bib":   `@misc{b, author = {Bocek, Thomas}, title = {Newer}, year = {2024}}`,
 	})
@@ -288,8 +288,8 @@ func TestCompileBib(t *testing.T) {
 // A filename that asks for a page anyway gets one.
 func TestCompileBibSplitOverride(t *testing.T) {
 	b := newBuild(t, map[string]string{
-		".templates/page.html": `{{ .Content }}`,
-		".templates/list.html": `{{ range .Items }}{{ .Content }}{{ end }}`,
+		".templates/page.html": `{{ data.Content }}`,
+		".templates/list.html": `{% for x in data.Items %}{{ x.Content }}{% endfor %}`,
 		"1-refs|split.bib":     `@misc{a, title = {One}, year = {2020}}`,
 	})
 	b.compile()
@@ -300,8 +300,8 @@ func TestCompileBibSplitOverride(t *testing.T) {
 func TestCompileBibWithoutOrderPrefix(t *testing.T) {
 	const raw = `@misc{a, title = {One}, year = {2020}}`
 	b := newBuild(t, map[string]string{
-		".templates/page.html": `{{ .Content }}`,
-		".templates/list.html": `{{ range .Items }}[{{ .URL }}]{{ end }}`,
+		".templates/page.html": `{{ data.Content }}`,
+		".templates/list.html": `{% for x in data.Items %}[{{ x.URL }}]{% endfor %}`,
 		"refs.bib":             raw,
 	})
 	b.compile()
@@ -311,9 +311,9 @@ func TestCompileBibWithoutOrderPrefix(t *testing.T) {
 
 func TestCompileBibIsCached(t *testing.T) {
 	b, run := warm(t, map[string]string{
-		".templates/page.html": `{{ .Content }}`,
-		".templates/list.html": `{{ range .Items }}{{ .Content }}{{ end }}`,
-		".templates/bib.html":  `{{ .Content }}`,
+		".templates/page.html": `{{ data.Content }}`,
+		".templates/list.html": `{% for x in data.Items %}{{ x.Content }}{% endfor %}`,
+		".templates/bib.html":  `{{ data.Content }}`,
 		"1-refs.bib":           `@misc{a, title = {One}, year = {2020}}`,
 	})
 	run()

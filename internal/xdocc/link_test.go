@@ -4,10 +4,10 @@ import "testing"
 
 func linkFiles(link string) map[string]string {
 	return map[string]string{
-		".templates/page.html":     `{{ .Content }}`,
-		".templates/list.html":     `{{ range .Items }}{{ .Content }}{{ end }}`,
-		".templates/markdown.html": `[{{ .URL }}]`,
-		".templates/link.html":     `({{ .Content }})`,
+		".templates/page.html":     `{{ data.Content }}`,
+		".templates/list.html":     `{% for x in data.Items %}{{ x.Content }}{% endfor %}`,
+		".templates/markdown.html": `[{{ data.URL }}]`,
+		".templates/link.html":     `({{ data.Content }})`,
 		"1-pull.link":              link,
 		"2-news[News]/1-a.md":      "a",
 		"2-news[News]/2-b.md":      "b",
@@ -65,9 +65,9 @@ func TestLinkMissingTargetIsEmpty(t *testing.T) {
 
 func TestLinkItemsByURL(t *testing.T) {
 	b := newBuild(t, map[string]string{
-		".templates/page.html":     `{{ .Content }}`,
-		".templates/markdown.html": `{{ .Content }}`,
-		".templates/list.html":     `{{ (index .ItemsByURL "intro.html").Content }}`,
+		".templates/page.html":     `{{ data.Content }}`,
+		".templates/markdown.html": `{{ data.Content }}`,
+		".templates/list.html":     `{{ (data.ItemsByURL["intro.html"]).Content }}`,
 		"1-intro.md":               "the intro",
 		"2-other.md":               "other",
 	})
