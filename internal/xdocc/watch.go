@@ -28,10 +28,14 @@ func (s *Site) Watch(ctx context.Context) error {
 		return err
 	}
 
+	// The first build is the expensive one - nothing is cached and the output
+	// tree is whatever was left behind - so it says how long it took, the same
+	// way every rebuild after it does.
+	start := time.Now()
 	if result, err := s.Compile(); err != nil {
 		log.Printf("xdocc: %v", err)
 	} else {
-		log.Printf("xdocc: %s", result)
+		log.Printf("xdocc: %s in %s", result, time.Since(start).Round(time.Millisecond))
 	}
 
 	timer := time.NewTimer(debounce)

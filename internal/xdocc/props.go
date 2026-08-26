@@ -21,6 +21,7 @@ const (
 	PropMinify   = "minify"
 	PropCompress = "compress"
 	PropRescan   = "rescan"
+	PropWorkers  = "workers"
 )
 
 // structural properties describe a single item and are never inherited from a

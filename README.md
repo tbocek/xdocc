@@ -276,6 +276,7 @@ everywhere — losing content to a misspelling is the worse way to be wrong.
 | `minify` | bool | `true` | minify HTML, CSS, JS, SVG, JSON and XML on the way out |
 | `compress` | bool | `true` | write a `.gz` and a `.br` next to every text file in the output |
 | `rescan` | duration | `10m` | how often the watcher rereads the whole tree even though nothing was reported; `off` disables it |
+| `workers` | count | processors + 1 | how many output files are minified, compressed and written at once |
 
 Assets are symlinked by default. A site whose weight is in its files — a lecture
 folder full of video, a directory of PDFs — is then generated in milliseconds and
@@ -302,6 +303,10 @@ already: images, video, PDFs, archives. `compress: false` turns it off.
 
 If the source tree still holds `.gz` or `.br` files from an earlier build, next to the
 file they belong to, xdocc ignores them and says so — it writes those paths itself now.
+It says so **once**: the copy is derived from the file beside it, so as long as that
+file has not moved there is nothing new to report, and repeating it on every rebuild
+would bury everything else in the log. It is said again when the file it comes from
+changes, and again at the next start, so a fresh log still describes the tree.
 
 ### Legacy spellings
 
@@ -513,6 +518,28 @@ With `-w`, xdocc stays running and watches the source tree recursively, includin
 `.templates` and every `.xdocc`. Changes are collected for 200 ms before it recompiles,
 so an editor writing a burst of files causes one build.
 
+### Doing several files at once
+
+Minifying and compressing at the highest setting is where a build spends its time, and
+one output file's share of it has nothing to do with any other's. The walk stays single
+file at a time — it renders pages in order and gathers them into listings — and hands
+off everything after that to a pool of workers: reading the source, minifying it,
+compressing it twice, writing it out.
+
+The pool is one worker per processor plus one, the extra covering the moments a worker
+is waiting on the disk rather than working. On a 12-processor machine, rebuilding
+`old/site` — 2982 outputs, of which 1948 are compressed copies:
+
+| workers | 1 | 2 | 4 | 8 | 12 | 13 | 16 | 24 |
+|---|---|---|---|---|---|---|---|---|
+| time | 1900 ms | 998 ms | 581 ms | 426 ms | 399 ms | 406 ms | 430 ms | 437 ms |
+
+It flattens once the processors are busy, which is what a processor-bound build should
+do. Set `workers: 1` in the root `.xdocc` to make a build single file at a time. The
+site that comes out is the same either way: where two sources would write the same
+output — the mistake xdocc reports as a warning — the second waits for the first, so
+the result never depends on which worker finished when.
+
 ### What a change costs
 
 A running xdocc keeps the item tree, the rendered HTML and the state of the output tree
@@ -529,7 +556,8 @@ in memory, so a rebuild reads only what moved:
 Everything is *rendered* again either way. Rendering from memory is cheap, and it is
 what keeps a page from going stale because of a file it does not contain; only the disk
 is narrowed. On the site under `old/site` — 2600 files, 91 GB, 3000 outputs — editing
-one markdown file is a 33 ms rebuild that writes three files.
+one markdown file is a 34 ms rebuild that reads that one file and writes six: the page,
+the listing above it, and a `.gz` and a `.br` for each.
 
 File system notifications are best effort: a network share, a container bind mount, or
 a burst that overran the kernel queue can swallow one, and then a page stays stale until
@@ -583,13 +611,23 @@ warning.
 Every run says what it did:
 
 ```
-xdocc: 3 written, 2979 unchanged (61 pages, 2921 assets)
+xdocc: 2982 written, 0 unchanged (61 pages, 2921 assets), 235 read in 990ms   ← at startup
+xdocc: 6 written, 2976 unchanged (61 pages, 2921 assets), 1 read in 39ms      ← after an edit
 ```
 
 Pages and assets are what the site is made of, compressed copies counted as assets;
-written and unchanged are what this run had to touch. While watching, the line appears
-only when something really was written or removed, so a quiet tree stays quiet in the
-log.
+written and unchanged are what this run had to touch. **Read** is the source files that
+came off the disk rather than out of a cache — the work neither cache could spare. It
+is worth knowing that it is never zero on a full walk: the hash that decides whether a
+file changed is a hash of the file's bytes, so the walk has to read every content file
+to find out that it need not render it. What the caches save is the parsing, the
+rendering, the minifying and the compressing, not the read. A rebuild driven by the
+watcher skips the walk altogether and reads only the file that changed.
+
+The first build is the expensive one — nothing is cached and the output tree is
+whatever was left behind — so it is timed like every rebuild after it. While watching,
+the line then appears only when something really was written or removed, so a quiet
+tree stays quiet in the log.
 
 ---
 

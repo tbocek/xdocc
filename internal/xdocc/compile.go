@@ -13,6 +13,8 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+	"sync"
+	"sync/atomic"
 	"time"
 )
 
@@ -75,6 +77,7 @@ type Result struct {
 	Written   int // output files created or overwritten
 	Unchanged int // output files that were already what they should be
 	Removed   int // output paths that no longer have a source
+	Read      int // source files taken off the disk rather than from a cache
 }
 
 // String is the line the command and the watcher print.
@@ -83,23 +86,106 @@ func (r Result) String() string {
 	if r.Removed > 0 {
 		out += fmt.Sprintf(", %d removed", r.Removed)
 	}
-	return fmt.Sprintf("%s (%d pages, %d assets)", out, r.Pages, r.Assets)
+	return fmt.Sprintf("%s (%d pages, %d assets), %d read", out, r.Pages, r.Assets, r.Read)
+}
+
+// counts are the tallies of one run. They are apart from Result because the
+// workers add to them from several goroutines at once.
+type counts struct {
+	pages, assets, written, unchanged, removed atomic.Int64
 }
 
 // compiler holds the state of one compilation run.
 type compiler struct {
-	site     *Site
+	site   *Site
+	counts counts
+	pool   *pool
+
+	// mu guards the three fields below and the site's memory of the output
+	// tree. Everything that costs - reading, minifying, compressing, writing -
+	// happens outside it.
+	mu       sync.Mutex
 	produced map[string]bool
-	result   Result
+
+	// claimed is the walk's own record of the output paths it has handed out.
+	// Only the walk goroutine touches it, so it needs no lock.
+	claimed map[string]bool
 
 	// noSymlink is set once symlinking has failed, so a file system without
 	// symlinks costs one failed attempt and not one per file.
 	noSymlink bool
 }
 
+// result is what the run has done so far.
+func (c *compiler) result() Result {
+	return Result{
+		Pages:     int(c.counts.pages.Load()),
+		Assets:    int(c.counts.assets.Load()),
+		Written:   int(c.counts.written.Load()),
+		Unchanged: int(c.counts.unchanged.Load()),
+		Removed:   int(c.counts.removed.Load()),
+		Read:      int(c.site.reads.Load()),
+	}
+}
+
+// claim records an output path on the walk goroutine, before any worker is
+// given work for it. Two sources with the same url is a mistake xdocc reports,
+// but letting their workers race for the path would make the site depend on
+// which one happened to finish last, so the second waits for everything before
+// it. It costs nothing on a tree that has no duplicates.
+func (c *compiler) claim(rel string) {
+	target := filepath.Join(c.site.Gen, filepath.FromSlash(rel))
+	if c.claimed[target] {
+		// the error this returns is kept by the pool and reported by the wait
+		// at the end of the run
+		_ = c.pool.wait()
+	}
+	c.claimed[target] = true
+}
+
+// placement reads back what this process last put at an output path.
+func (c *compiler) placement(target string) (placement, bool) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	p, ok := c.site.placed[target]
+	return p, ok
+}
+
+// setPlacement records what was just put at an output path.
+func (c *compiler) setPlacement(target string, p placement) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.site.placed[target] = p
+}
+
+// symlinking reports whether assets are still being linked rather than copied.
+func (c *compiler) symlinking() bool {
+	if !c.site.Symlink() {
+		return false
+	}
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return !c.noSymlink
+}
+
+// symlinkFailed switches the run over to copying, and says so once however many
+// workers ran into the same wall.
+func (c *compiler) symlinkFailed(err error) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if c.noSymlink {
+		return
+	}
+	// Windows without the privilege, a FAT stick, an exported share: whatever
+	// the reason, this tree has no symlinks and copying is what is left.
+	log.Printf("xdocc: cannot symlink (%v), copying instead", err)
+	c.noSymlink = true
+}
+
 // Compile brings the output tree in line with the source tree and reports what
 // that took.
 func (s *Site) Compile() (Result, error) {
+	s.reads.Store(0)
 	if err := s.refresh(); err != nil {
 		return Result{}, err
 	}
@@ -112,19 +198,30 @@ func (s *Site) Compile() (Result, error) {
 		clear(s.placed)
 		s.placedWith = flags
 	}
-	c := &compiler{site: s, produced: map[string]bool{}}
-	if err := c.compileDir(s.Root); err != nil {
-		return c.result, err
+	c := &compiler{
+		site:     s,
+		produced: map[string]bool{},
+		claimed:  map[string]bool{},
+		pool:     newPool(s.Workers()),
+	}
+	walkErr := c.compileDir(s.Root)
+	// Every output has to be accounted for before cleanup can tell what is
+	// stale, so the pool is drained even when the walk gave up early.
+	if err := c.pool.wait(); err != nil && walkErr == nil {
+		walkErr = err
+	}
+	if walkErr != nil {
+		return c.result(), walkErr
 	}
 	if err := c.cleanup(); err != nil {
-		return c.result, err
+		return c.result(), err
 	}
 	if s.cache != nil {
 		if err := s.cache.Save(); err != nil {
-			return c.result, err
+			return c.result(), err
 		}
 	}
-	return c.result, nil
+	return c.result(), nil
 }
 
 // compileDir generates everything a directory is responsible for: its items,
@@ -149,9 +246,11 @@ func (c *compiler) compileDir(dir *Item) error {
 		}
 
 		if !child.IsTransformed() {
-			if err := c.copyAsset(child); err != nil {
-				return err
-			}
+			// Reading the file, minifying it and compressing it twice is the
+			// bulk of a build and has nothing to do with the walk, so it goes
+			// to a worker and the walk carries on.
+			c.claim(child.URL)
+			c.pool.do(func() error { return c.copyAsset(child) })
 			if !child.isContent() {
 				continue
 			}
@@ -346,10 +445,16 @@ func (c *compiler) writePage(item *Item, data *Data) error {
 		return err
 	}
 	out := []byte(substitute(string(html), item, page.Root))
-	if c.site.Minify() {
-		out = minifyBytes(item.URL, out)
-	}
-	return c.place(item.URL, nil, func() ([]byte, error) { return out, nil })
+	// The page is rendered; minifying it, compressing it and writing it out is
+	// not, and that part depends on nothing else in the tree.
+	c.claim(item.URL)
+	c.pool.do(func() error {
+		if c.site.Minify() {
+			out = minifyBytes(item.URL, out)
+		}
+		return c.place(item.URL, nil, func() ([]byte, error) { return out, nil })
+	})
+	return nil
 }
 
 // placeholder matches ${name} and the percent-encoded spelling a markdown link
@@ -394,16 +499,16 @@ func (c *compiler) place(rel string, src *Item, content func() ([]byte, error)) 
 	target := filepath.Join(c.site.Gen, filepath.FromSlash(rel))
 	c.produce(target)
 	if src == nil {
-		c.result.Pages++
+		c.counts.pages.Add(1)
 	} else {
-		c.result.Assets++
+		c.counts.assets.Add(1)
 	}
 
-	p, known := c.site.placed[target]
+	p, known := c.placement(target)
 	fresh := known && src != nil && p.link == "" &&
 		p.srcSize == src.FileSize && p.srcMod.Equal(src.ModTime)
 	if fresh && (!p.sidecars || c.haveSidecars(target)) {
-		c.result.Unchanged++
+		c.counts.unchanged.Add(1)
 		if p.sidecars {
 			return c.sidecars(target, nil, false)
 		}
@@ -440,9 +545,9 @@ func (c *compiler) sidecars(target string, data []byte, changed bool) error {
 	for _, e := range encoders {
 		name := target + e.suffix
 		c.produce(name)
-		c.result.Assets++
+		c.counts.assets.Add(1)
 		if data == nil || (!changed && c.have(name)) {
-			c.result.Unchanged++
+			c.counts.unchanged.Add(1)
 			continue
 		}
 		encoded, err := e.encode(data)
@@ -468,7 +573,7 @@ func (c *compiler) haveSidecars(target string) bool {
 
 // have reports whether an output file is already there, remembering the answer.
 func (c *compiler) have(target string) bool {
-	if _, ok := c.site.placed[target]; ok {
+	if _, ok := c.placement(target); ok {
 		return true
 	}
 	_, err := os.Lstat(target)
@@ -482,7 +587,7 @@ func (c *compiler) store(target string, data []byte, src *Item, sidecars bool) (
 	if src != nil {
 		p.srcSize, p.srcMod = src.FileSize, src.ModTime
 	}
-	prev, known := c.site.placed[target]
+	prev, known := c.placement(target)
 	unchanged := known && prev.link == "" && prev.hash == p.hash
 	if !known {
 		// First run of this process: the output tree is whatever was left
@@ -495,8 +600,8 @@ func (c *compiler) store(target string, data []byte, src *Item, sidecars bool) (
 		}
 	}
 	if unchanged {
-		c.site.placed[target] = p
-		c.result.Unchanged++
+		c.setPlacement(target, p)
+		c.counts.unchanged.Add(1)
 		return false, nil
 	}
 	if err := os.MkdirAll(filepath.Dir(target), 0o755); err != nil {
@@ -508,8 +613,8 @@ func (c *compiler) store(target string, data []byte, src *Item, sidecars bool) (
 	if err := os.WriteFile(target, data, 0o644); err != nil {
 		return false, err
 	}
-	c.site.placed[target] = p
-	c.result.Written++
+	c.setPlacement(target, p)
+	c.counts.written.Add(1)
 	return true, nil
 }
 
@@ -521,9 +626,11 @@ func (c *compiler) copyAsset(item *Item) error {
 	// A .gz or .br next to the file it belongs to is a build artefact that
 	// xdocc now keeps itself. Passing it through would write the same output
 	// path twice, once from the source and once from the compressor.
-	if c.site.Compress() && isSidecarOf(item) {
-		log.Printf("xdocc: %s is generated by xdocc now, the copy in the source tree is ignored", item.Rel)
-		return nil
+	if c.site.Compress() {
+		if base, ok := sidecarBase(item); ok {
+			c.reportSidecar(item, base)
+			return nil
+		}
 	}
 	if _, ok := minifyType[strings.ToLower(path.Ext(item.URL))]; ok && c.site.Minify() {
 		return c.place(item.URL, item, func() ([]byte, error) {
@@ -539,7 +646,7 @@ func (c *compiler) copyAsset(item *Item) error {
 	// whether the compressed copies are still good has to be asked before the
 	// link is written and the stamp on it renewed.
 	target := filepath.Join(c.site.Gen, filepath.FromSlash(item.URL))
-	p := c.site.placed[target]
+	p, _ := c.placement(target)
 	fresh := p.srcSize == item.FileSize && p.srcMod.Equal(item.ModTime)
 
 	if err := c.linkAsset(item, target); err != nil {
@@ -558,30 +665,52 @@ func (c *compiler) copyAsset(item *Item) error {
 	return c.sidecars(target, data, data != nil)
 }
 
-// isSidecarOf reports whether the file is the compressed copy of a file next to
-// it, and so something a previous build - xdocc or another - left behind.
-func isSidecarOf(item *Item) bool {
+// sidecarBase reports whether the file is the compressed copy of a file next to
+// it - something a previous build, xdocc or another, left behind - and returns
+// the file it was made from.
+func sidecarBase(item *Item) (os.FileInfo, bool) {
 	for _, e := range encoders {
 		base, ok := strings.CutSuffix(item.FileName, e.suffix)
 		if !ok || !compressExt[strings.ToLower(path.Ext(base))] {
 			continue
 		}
-		if _, err := os.Stat(filepath.Join(filepath.Dir(item.Source), base)); err == nil {
-			return true
+		if info, err := os.Stat(filepath.Join(filepath.Dir(item.Source), base)); err == nil {
+			return info, true
 		}
 	}
-	return false
+	return nil, false
+}
+
+// reportSidecar says that a .gz or .br in the source tree is xdocc's to write
+// now, and says it once. The copy is derived from the file beside it, so as
+// long as that file has not moved there is nothing new to report - repeating it
+// on every rebuild would bury everything else in the log. It is said again when
+// the file it comes from changes, which is when someone might act on it, and
+// again on the next start, so a fresh log still describes the tree.
+func (c *compiler) reportSidecar(item *Item, base os.FileInfo) {
+	now := stampOf(base)
+	rel := filepath.ToSlash(item.Rel)
+
+	c.mu.Lock()
+	was, seen := c.site.reported[rel]
+	c.site.reported[rel] = now
+	c.mu.Unlock()
+
+	if seen && was.same(now) {
+		return
+	}
+	log.Printf("xdocc: %s is generated by xdocc now, the copy in the source tree is ignored", item.Rel)
 }
 
 // linkAsset points the output at the source instead of duplicating it, and
 // copies where that is not possible.
 func (c *compiler) linkAsset(item *Item, target string) error {
 	c.produce(target)
-	c.result.Assets++
+	c.counts.assets.Add(1)
 	if err := os.MkdirAll(filepath.Dir(target), 0o755); err != nil {
 		return err
 	}
-	if c.site.Symlink() && !c.noSymlink {
+	if c.symlinking() {
 		// a relative link keeps working when the output tree is moved; an
 		// absolute one (a different volume on Windows) is left as is
 		link := item.Source
@@ -589,40 +718,36 @@ func (c *compiler) linkAsset(item *Item, target string) error {
 			link = path.Join(strings.Split(rel, string(os.PathSeparator))...)
 		}
 		stamp := placement{link: link, srcSize: item.FileSize, srcMod: item.ModTime}
-		if p, ok := c.site.placed[target]; ok && p.link == link {
-			c.site.placed[target] = stamp
-			c.result.Unchanged++
+		if p, ok := c.placement(target); ok && p.link == link {
+			c.setPlacement(target, stamp)
+			c.counts.unchanged.Add(1)
 			return nil
 		}
 		if old, err := os.Readlink(target); err == nil && old == link {
-			c.site.placed[target] = stamp
-			c.result.Unchanged++
+			c.setPlacement(target, stamp)
+			c.counts.unchanged.Add(1)
 			return nil
 		}
 		if err := os.RemoveAll(target); err != nil {
 			return err
 		}
 		if err := os.Symlink(link, target); err == nil {
-			c.site.placed[target] = stamp
-			c.result.Written++
+			c.setPlacement(target, stamp)
+			c.counts.written.Add(1)
 			return nil
 		} else {
-			// Windows without the privilege, a FAT stick, an exported share:
-			// whatever the reason, this tree has no symlinks and copying is
-			// what is left. Say so once and copy everything from here on.
-			log.Printf("xdocc: cannot symlink (%v), copying instead", err)
-			c.noSymlink = true
+			c.symlinkFailed(err)
 		}
 	}
-	if p, ok := c.site.placed[target]; ok && p.link == "" &&
+	if p, ok := c.placement(target); ok && p.link == "" &&
 		p.srcSize == item.FileSize && p.srcMod.Equal(item.ModTime) {
-		c.result.Unchanged++
+		c.counts.unchanged.Add(1)
 		return nil
 	}
 	if info, err := os.Lstat(target); err == nil && info.Mode().IsRegular() &&
 		info.Size() == item.FileSize && !info.ModTime().Before(item.ModTime) {
-		c.site.placed[target] = placement{srcSize: item.FileSize, srcMod: item.ModTime}
-		c.result.Unchanged++
+		c.setPlacement(target, placement{srcSize: item.FileSize, srcMod: item.ModTime})
+		c.counts.unchanged.Add(1)
 		return nil
 	}
 	if err := os.RemoveAll(target); err != nil {
@@ -631,8 +756,9 @@ func (c *compiler) linkAsset(item *Item, target string) error {
 	if err := copyFile(item.Source, target); err != nil {
 		return err
 	}
-	c.site.placed[target] = placement{srcSize: item.FileSize, srcMod: item.ModTime}
-	c.result.Written++
+	c.site.reads.Add(1)
+	c.setPlacement(target, placement{srcSize: item.FileSize, srcMod: item.ModTime})
+	c.counts.written.Add(1)
 	return os.Chtimes(target, time.Now(), item.ModTime)
 }
 
@@ -656,6 +782,8 @@ func copyFile(source, target string) error {
 // produce records an output file and every directory leading to it, so that
 // cleanup knows what to keep.
 func (c *compiler) produce(target string) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
 	if c.produced[target] {
 		log.Printf("xdocc: %s is written twice, two sources have the same url",
 			strings.TrimPrefix(target, c.site.Gen+string(filepath.Separator)))
@@ -694,7 +822,7 @@ func (c *compiler) cleanup() error {
 		if err := os.RemoveAll(p); err != nil {
 			return err
 		}
-		c.result.Removed++
+		c.counts.removed.Add(1)
 		for target := range c.site.placed {
 			if target == p || strings.HasPrefix(target, p+string(filepath.Separator)) {
 				delete(c.site.placed, target)

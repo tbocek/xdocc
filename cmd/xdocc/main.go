@@ -9,6 +9,7 @@ import (
 	"os"
 	"os/signal"
 	"syscall"
+	"time"
 
 	"github.com/tbocek/xdocc/internal/xdocc"
 )
@@ -65,11 +66,12 @@ func main() {
 	site.SetCache(cache)
 
 	if !*watch {
+		start := time.Now()
 		result, err := site.Compile()
 		if err != nil {
 			log.Fatalf("xdocc: %v", err)
 		}
-		log.Printf("xdocc: %s", result)
+		log.Printf("xdocc: %s in %s", result, time.Since(start).Round(time.Millisecond))
 		return
 	}
 
