@@ -1,6 +1,7 @@
 package xdocc
 
 import (
+	"crypto/sha256"
 	"fmt"
 	"html/template"
 	"io"
@@ -64,38 +65,66 @@ func (d *Data) NavHTML() string {
 	return out.String()
 }
 
+// Result counts what one compilation run did to the output tree. Pages and
+// Assets add up to the files xdocc is responsible for, and so do Written and
+// Unchanged: the first split says what the site is made of, the second what the
+// run had to touch.
+type Result struct {
+	Pages     int // pages rendered from content
+	Assets    int // files placed beside them, compressed copies included
+	Written   int // output files created or overwritten
+	Unchanged int // output files that were already what they should be
+	Removed   int // output paths that no longer have a source
+}
+
+// String is the line the command and the watcher print.
+func (r Result) String() string {
+	out := fmt.Sprintf("%d written, %d unchanged", r.Written, r.Unchanged)
+	if r.Removed > 0 {
+		out += fmt.Sprintf(", %d removed", r.Removed)
+	}
+	return fmt.Sprintf("%s (%d pages, %d assets)", out, r.Pages, r.Assets)
+}
+
 // compiler holds the state of one compilation run.
 type compiler struct {
 	site     *Site
 	produced map[string]bool
-	written  int
+	result   Result
 
 	// noSymlink is set once symlinking has failed, so a file system without
 	// symlinks costs one failed attempt and not one per file.
 	noSymlink bool
 }
 
-// Compile reads the source tree and generates the output tree.
-func (s *Site) Compile() (int, error) {
-	if err := s.Load(); err != nil {
-		return 0, err
+// Compile brings the output tree in line with the source tree and reports what
+// that took.
+func (s *Site) Compile() (Result, error) {
+	if err := s.refresh(); err != nil {
+		return Result{}, err
 	}
 	if err := os.MkdirAll(s.Gen, 0o755); err != nil {
-		return 0, err
+		return Result{}, err
+	}
+	// What xdocc remembers of the output tree describes a tree built with the
+	// settings that were in force then. Change one and none of it holds.
+	if flags := s.outputFlags(); flags != s.placedWith {
+		clear(s.placed)
+		s.placedWith = flags
 	}
 	c := &compiler{site: s, produced: map[string]bool{}}
 	if err := c.compileDir(s.Root); err != nil {
-		return c.written, err
+		return c.result, err
 	}
 	if err := c.cleanup(); err != nil {
-		return c.written, err
+		return c.result, err
 	}
 	if s.cache != nil {
 		if err := s.cache.Save(); err != nil {
-			return c.written, err
+			return c.result, err
 		}
 	}
-	return c.written, nil
+	return c.result, nil
 }
 
 // compileDir generates everything a directory is responsible for: its items,
@@ -109,7 +138,7 @@ func (c *compiler) compileDir(dir *Item) error {
 			if err := c.compileDir(child); err != nil {
 				return err
 			}
-			if child.isContent() && !child.Nolist() && !child.LinkOnly() {
+			if child.isContent() && child.Show().List {
 				data, err := c.render(child, dir, 0)
 				if err != nil {
 					return err
@@ -135,10 +164,10 @@ func (c *compiler) compileDir(dir *Item) error {
 			index = data
 			continue
 		}
-		if child.isContent() && !child.Nolist() && !child.LinkOnly() {
+		if child.isContent() && child.Show().List {
 			items = append(items, data)
 		}
-		if child.IsTransformed() && child.Split() && dir.Split() {
+		if child.IsTransformed() && child.Show().Page && dir.Show().Page {
 			if err := c.writePage(child, data); err != nil {
 				return err
 			}
@@ -149,8 +178,8 @@ func (c *compiler) compileDir(dir *Item) error {
 
 	// An item called "index" is the page of its directory and replaces the
 	// generated listing. It is the page itself, not an item next to it, so
-	// split does not apply and it is written even into a directory that xdocc
-	// otherwise only passes through.
+	// show=page does not apply to it and it is written even into a directory
+	// that xdocc otherwise only passes through.
 	if index != nil {
 		return c.writePage(dir, index)
 	}
@@ -259,15 +288,15 @@ func (c *compiler) link(item, page *Item, depth int) (template.HTML, error) {
 	}
 	var out strings.Builder
 	for _, target := range pulled {
-		// nolist skips .link pulls too; linkonly is the listing-only counterpart
-		if target.Nolist() {
+		// a .link file pulls in what says it is shown by a link
+		if !target.Show().Link {
 			continue
 		}
 		if target.IsDir {
 			// a directory is pulled in as its own listing
 			var items []*Data
 			for _, child := range target.ContentItems() {
-				if child.Nolist() {
+				if !child.Show().List {
 					continue
 				}
 				data, err := c.render(child, page, depth+1)
@@ -316,7 +345,11 @@ func (c *compiler) writePage(item *Item, data *Data) error {
 	if err != nil {
 		return err
 	}
-	return c.write(item.URL, []byte(substitute(string(html), item, page.Root)))
+	out := []byte(substitute(string(html), item, page.Root))
+	if c.site.Minify() {
+		out = minifyBytes(item.URL, out)
+	}
+	return c.place(item.URL, nil, func() ([]byte, error) { return out, nil })
 }
 
 // placeholder matches ${name} and the percent-encoded spelling a markdown link
@@ -350,29 +383,201 @@ func substitute(text string, item *Item, root string) string {
 	})
 }
 
-// write puts a generated file into the output tree, skipping the write when the
-// content is unchanged so that mtimes stay useful.
-func (c *compiler) write(rel string, content []byte) error {
+// place puts one output file into the tree, with its compressed copies beside
+// it. src is the single source file the output comes from, when there is one:
+// its size and mtime let a later run leave an untouched asset alone without
+// reading it. A page is rendered from many files and passes nil.
+//
+// content is a function because on the quiet path it is never called: nothing
+// is read, nothing is minified, nothing is compressed.
+func (c *compiler) place(rel string, src *Item, content func() ([]byte, error)) error {
 	target := filepath.Join(c.site.Gen, filepath.FromSlash(rel))
 	c.produce(target)
-	if old, err := os.ReadFile(target); err == nil && string(old) == string(content) {
+	if src == nil {
+		c.result.Pages++
+	} else {
+		c.result.Assets++
+	}
+
+	p, known := c.site.placed[target]
+	fresh := known && src != nil && p.link == "" &&
+		p.srcSize == src.FileSize && p.srcMod.Equal(src.ModTime)
+	if fresh && (!p.sidecars || c.haveSidecars(target)) {
+		c.result.Unchanged++
+		if p.sidecars {
+			return c.sidecars(target, nil, false)
+		}
 		return nil
 	}
-	if err := os.MkdirAll(filepath.Dir(target), 0o755); err != nil {
+
+	data, err := content()
+	if err != nil {
 		return err
 	}
-	if err := os.WriteFile(target, content, 0o644); err != nil {
+	sidecars := c.compressible(rel, len(data))
+	changed, err := c.store(target, data, src, sidecars)
+	if err != nil {
 		return err
 	}
-	c.written++
+	if !sidecars {
+		return nil
+	}
+	return c.sidecars(target, data, changed)
+}
+
+// compressible reports whether an output of that name and size gets compressed
+// copies.
+func (c *compiler) compressible(rel string, size int) bool {
+	return c.site.Compress() && size >= minCompressSize &&
+		compressExt[strings.ToLower(path.Ext(rel))]
+}
+
+// sidecars keeps the .gz and the .br next to an output file in step with it.
+// Compressing at the highest setting is the one expensive thing in a build, so
+// it happens only when the bytes it would compress have moved. data may be nil
+// when they have not.
+func (c *compiler) sidecars(target string, data []byte, changed bool) error {
+	for _, e := range encoders {
+		name := target + e.suffix
+		c.produce(name)
+		c.result.Assets++
+		if data == nil || (!changed && c.have(name)) {
+			c.result.Unchanged++
+			continue
+		}
+		encoded, err := e.encode(data)
+		if err != nil {
+			return err
+		}
+		if _, err := c.store(name, encoded, nil, false); err != nil {
+			return err
+		}
+	}
 	return nil
 }
 
-// copyAsset puts a file into the output: a symlink where the file system has
-// them, a copy where it has not.
+// haveSidecars reports whether both compressed copies of an output are there.
+func (c *compiler) haveSidecars(target string) bool {
+	for _, e := range encoders {
+		if !c.have(target + e.suffix) {
+			return false
+		}
+	}
+	return true
+}
+
+// have reports whether an output file is already there, remembering the answer.
+func (c *compiler) have(target string) bool {
+	if _, ok := c.site.placed[target]; ok {
+		return true
+	}
+	_, err := os.Lstat(target)
+	return err == nil
+}
+
+// store writes data at target unless it is already there, and remembers what it
+// put there so that the next run does not have to read it back.
+func (c *compiler) store(target string, data []byte, src *Item, sidecars bool) (bool, error) {
+	p := placement{hash: sha256.Sum256(data), sidecars: sidecars}
+	if src != nil {
+		p.srcSize, p.srcMod = src.FileSize, src.ModTime
+	}
+	prev, known := c.site.placed[target]
+	unchanged := known && prev.link == "" && prev.hash == p.hash
+	if !known {
+		// First run of this process: the output tree is whatever was left
+		// behind, so it has to be read back once. A symlink from an earlier run
+		// is not read through - writing into it would rewrite the source.
+		if info, err := os.Lstat(target); err == nil && info.Mode().IsRegular() {
+			if old, err := os.ReadFile(target); err == nil && sha256.Sum256(old) == p.hash {
+				unchanged = true
+			}
+		}
+	}
+	if unchanged {
+		c.site.placed[target] = p
+		c.result.Unchanged++
+		return false, nil
+	}
+	if err := os.MkdirAll(filepath.Dir(target), 0o755); err != nil {
+		return false, err
+	}
+	if err := os.RemoveAll(target); err != nil {
+		return false, err
+	}
+	if err := os.WriteFile(target, data, 0o644); err != nil {
+		return false, err
+	}
+	c.site.placed[target] = p
+	c.result.Written++
+	return true, nil
+}
+
+// copyAsset puts a file into the output. A file xdocc rewrites - a minified
+// stylesheet, a minified SVG - is written, because the output is then no longer
+// the file the source holds. Everything else is pointed at instead of
+// duplicated, and text still gets its compressed copies beside the link.
 func (c *compiler) copyAsset(item *Item) error {
+	// A .gz or .br next to the file it belongs to is a build artefact that
+	// xdocc now keeps itself. Passing it through would write the same output
+	// path twice, once from the source and once from the compressor.
+	if c.site.Compress() && isSidecarOf(item) {
+		log.Printf("xdocc: %s is generated by xdocc now, the copy in the source tree is ignored", item.Rel)
+		return nil
+	}
+	if _, ok := minifyType[strings.ToLower(path.Ext(item.URL))]; ok && c.site.Minify() {
+		return c.place(item.URL, item, func() ([]byte, error) {
+			data, err := c.site.readSource(item.Source)
+			if err != nil {
+				return nil, err
+			}
+			return minifyBytes(item.Rel, data), nil
+		})
+	}
+
+	// The link is the same whether the file behind it changed or not, so
+	// whether the compressed copies are still good has to be asked before the
+	// link is written and the stamp on it renewed.
 	target := filepath.Join(c.site.Gen, filepath.FromSlash(item.URL))
+	p := c.site.placed[target]
+	fresh := p.srcSize == item.FileSize && p.srcMod.Equal(item.ModTime)
+
+	if err := c.linkAsset(item, target); err != nil {
+		return err
+	}
+	if !c.compressible(item.URL, int(item.FileSize)) {
+		return nil
+	}
+	var data []byte
+	if !fresh || !c.haveSidecars(target) {
+		var err error
+		if data, err = c.site.readSource(item.Source); err != nil {
+			return err
+		}
+	}
+	return c.sidecars(target, data, data != nil)
+}
+
+// isSidecarOf reports whether the file is the compressed copy of a file next to
+// it, and so something a previous build - xdocc or another - left behind.
+func isSidecarOf(item *Item) bool {
+	for _, e := range encoders {
+		base, ok := strings.CutSuffix(item.FileName, e.suffix)
+		if !ok || !compressExt[strings.ToLower(path.Ext(base))] {
+			continue
+		}
+		if _, err := os.Stat(filepath.Join(filepath.Dir(item.Source), base)); err == nil {
+			return true
+		}
+	}
+	return false
+}
+
+// linkAsset points the output at the source instead of duplicating it, and
+// copies where that is not possible.
+func (c *compiler) linkAsset(item *Item, target string) error {
 	c.produce(target)
+	c.result.Assets++
 	if err := os.MkdirAll(filepath.Dir(target), 0o755); err != nil {
 		return err
 	}
@@ -383,14 +588,23 @@ func (c *compiler) copyAsset(item *Item) error {
 		if rel, err := filepath.Rel(filepath.Dir(target), item.Source); err == nil && !filepath.IsAbs(rel) {
 			link = path.Join(strings.Split(rel, string(os.PathSeparator))...)
 		}
+		stamp := placement{link: link, srcSize: item.FileSize, srcMod: item.ModTime}
+		if p, ok := c.site.placed[target]; ok && p.link == link {
+			c.site.placed[target] = stamp
+			c.result.Unchanged++
+			return nil
+		}
 		if old, err := os.Readlink(target); err == nil && old == link {
+			c.site.placed[target] = stamp
+			c.result.Unchanged++
 			return nil
 		}
 		if err := os.RemoveAll(target); err != nil {
 			return err
 		}
 		if err := os.Symlink(link, target); err == nil {
-			c.written++
+			c.site.placed[target] = stamp
+			c.result.Written++
 			return nil
 		} else {
 			// Windows without the privilege, a FAT stick, an exported share:
@@ -400,8 +614,15 @@ func (c *compiler) copyAsset(item *Item) error {
 			c.noSymlink = true
 		}
 	}
+	if p, ok := c.site.placed[target]; ok && p.link == "" &&
+		p.srcSize == item.FileSize && p.srcMod.Equal(item.ModTime) {
+		c.result.Unchanged++
+		return nil
+	}
 	if info, err := os.Lstat(target); err == nil && info.Mode().IsRegular() &&
 		info.Size() == item.FileSize && !info.ModTime().Before(item.ModTime) {
+		c.site.placed[target] = placement{srcSize: item.FileSize, srcMod: item.ModTime}
+		c.result.Unchanged++
 		return nil
 	}
 	if err := os.RemoveAll(target); err != nil {
@@ -410,7 +631,8 @@ func (c *compiler) copyAsset(item *Item) error {
 	if err := copyFile(item.Source, target); err != nil {
 		return err
 	}
-	c.written++
+	c.site.placed[target] = placement{srcSize: item.FileSize, srcMod: item.ModTime}
+	c.result.Written++
 	return os.Chtimes(target, time.Now(), item.ModTime)
 }
 
@@ -471,6 +693,12 @@ func (c *compiler) cleanup() error {
 	for _, p := range stale {
 		if err := os.RemoveAll(p); err != nil {
 			return err
+		}
+		c.result.Removed++
+		for target := range c.site.placed {
+			if target == p || strings.HasPrefix(target, p+string(filepath.Separator)) {
+				delete(c.site.placed, target)
+			}
 		}
 	}
 	return nil

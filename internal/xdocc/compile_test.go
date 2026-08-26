@@ -26,9 +26,22 @@ func newBuild(t *testing.T, files map[string]string) *build {
 	for name, content := range files {
 		b.file(name, content)
 	}
+	// These tests are about what xdocc generates, not about how small it can
+	// make it: minified markup and a .gz beside every page would only obscure
+	// the assertions. A test that is about them says so in its own .xdocc.
+	// Minifying and compressing are on by default, and everywhere but in their
+	// own tests they would only obscure what is being asserted. Switch them off
+	// for the fixture; a test that is about them writes its own .xdocc.
+	b.xdocc(plainSite + files[XdoccFile])
 	b.cache = OpenCache("")
 	return b
 }
+
+// plainSite is the root .xdocc of a fixture that is about content only.
+const plainSite = "minify: false\ncompress: false\n"
+
+// xdocc writes the root settings, replacing what newBuild put there.
+func (b *build) xdocc(content string) { b.file(XdoccFile, content) }
 
 func (b *build) file(name, content string) {
 	b.t.Helper()
@@ -188,64 +201,64 @@ func TestCompileIndexItem(t *testing.T) {
 	b2.want("index.html", "[]")
 }
 
-func TestCompileNolist(t *testing.T) {
+func TestCompileShowPlaces(t *testing.T) {
 	b := newBuild(t, map[string]string{
-		".templates/page.html":     `{{ data.Content }}`,
-		".templates/list.html":     listTemplate,
-		".templates/markdown.html": `[{{ data.URL }}]`,
-		".templates/link.html":     `({{ data.Content }})`,
-		"1-pull.link":              "url=a/*\n",
-		"1-a[A]/0-x|nolist.md":     "hidden from both",
-		"1-a[A]/1-o|linkonly.md":   "links only",
-		"1-a[A]/2-y.md":            "visible",
-		"2-sib[Sib]/1-c.md":        "sib",
+		".templates/page.html":         `{{ data.Content }}`,
+		".templates/list.html":         listTemplate,
+		".templates/markdown.html":     `[{{ data.URL }}]`,
+		".templates/link.html":         `({{ data.Content }})`,
+		"1-pull.link":                  "url=a/*\n",
+		"1-a[A]/0-x|show=page.md":      "hidden from both",
+		"1-a[A]/1-o|show=page-link.md": "links only",
+		"1-a[A]/2-y.md":                "visible",
+		"2-sib[Sib]/1-c.md":            "sib",
 	})
 	b.compile()
-	// the generated listing skips nolist and linkonly items alike
+	// the generated listing skips whatever leaves "list" out
 	b.want("a/index.html", "[a/y.html]")
-	// a .link skips nolist items but pulls linkonly ones in
+	// a .link pulls in what keeps "link"
 	b.want("pull.html", "([a/o.html][a/y.html])")
 	// both are structural, not inherited: a sibling dir without them still lists
 	b.want("index.html", "[a/index.html][pull.html][sib/index.html]")
 	b.want("sib/index.html", "[sib/c.html]")
 
-	// an explicit .link name does not pull a nolist item either
+	// an explicit .link name does not pull an item without "link" either
 	b2 := newBuild(t, map[string]string{
 		".templates/page.html":     `{{ data.Content }}`,
 		".templates/list.html":     listTemplate,
 		".templates/markdown.html": `[{{ data.URL }}]`,
 		".templates/link.html":     `({{ data.Content }})`,
 		"1-pull.link":              "url=a/x\n",
-		"1-a[A]/0-x|nolist.md":     "hidden",
+		"1-a[A]/0-x|show=page.md":  "hidden",
 	})
 	b2.compile()
 	b2.want("pull.html", "()")
 }
 
-func TestCompileSplit(t *testing.T) {
+func TestCompileShowPage(t *testing.T) {
 	b := newBuild(t, map[string]string{
 		".templates/page.html": `{{ data.Content }}`,
 		".templates/list.html": listTemplate,
-		"1-news/.xdocc":        "nosplit\n",
+		"1-news/.xdocc":        "show=list-link\n",
 		"1-news/1-a.md":        "a",
 		"1-news/2-b.md":        "b",
 	})
 	b.compile()
 	b.want("news/index.html", "[news/a.html][news/b.html]")
 	if b.exists("news/a.html") {
-		t.Error("news/a.html was written although split is off")
+		t.Error("news/a.html was written although the directory leaves page out")
 	}
 
 	// a single item can opt out
 	b2 := newBuild(t, map[string]string{
-		".templates/page.html": `{{ data.Content }}`,
-		".templates/list.html": listTemplate,
-		"1-a|nosplit.md":       "a",
-		"2-b.md":               "b",
+		".templates/page.html":  `{{ data.Content }}`,
+		".templates/list.html":  listTemplate,
+		"1-a|show=list-link.md": "a",
+		"2-b.md":                "b",
 	})
 	b2.compile()
 	if b2.exists("a.html") {
-		t.Error("a.html was written although split is off")
+		t.Error("a.html was written although the item leaves page out")
 	}
 	if !b2.exists("b.html") {
 		t.Error("b.html is missing")
@@ -410,7 +423,7 @@ func TestCompilePassthroughSubtree(t *testing.T) {
 	b := newBuild(t, map[string]string{
 		".templates/page.html": `[{% if data.Content %}{{ data.Content }}{% endif %}]`,
 		".templates/list.html": listTemplate,
-		".xdocc":               "nosplit\n",
+		".xdocc":               "show=list-link\n",
 		"1-a.md":               "a",
 		"demo/index.html":      page,
 		"demo/hash.html":       "<html><body>hash</body></html>",
@@ -456,7 +469,7 @@ func TestCompileListTemplateSelection(t *testing.T) {
 		".templates/page.html":      `{{ data.Content }}`,
 		".templates/list.html":      listTemplate,
 		".templates/list-root.html": "[ROOT]",
-		".xdocc":                    "nosplit\nlayout: root\n",
+		".xdocc":                    "show=list-link\nlayout: root\n",
 		"1-a.md":                    "a",
 		"2-b.md":                    "b",
 		"3-c/1-d.md":                "d",
@@ -593,12 +606,12 @@ func TestCompileSymlinkSwitchesBothWays(t *testing.T) {
 		"logo.svg":             "<svg/>",
 	})
 	b.compile()
-	b.file(".xdocc", "symlink\n")
+	b.xdocc(plainSite + "symlink\n")
 	b.compile()
 	if _, err := os.Readlink(filepath.Join(b.gen, "logo.svg")); err != nil {
 		t.Fatalf("the copy was not replaced by a symlink: %v", err)
 	}
-	b.file(".xdocc", "symlink: false\n")
+	b.xdocc(plainSite + "symlink: false\n")
 	b.compile()
 	info, err := os.Lstat(filepath.Join(b.gen, "logo.svg"))
 	if err != nil {

@@ -135,14 +135,15 @@ func TestParseNameProps(t *testing.T) {
 	}{
 		{"1-intro|l=4.md", Props{PropLayout: "4"}},
 		{"1-news[News]nav", Props{PropNav: "", PropName: "News"}},
-		{"0-title|nosplit.md", Props{PropSplit: "false"}},
-		{"1-index|page.md", Props{PropSplit: "false"}},
+		{"0-title|show=list-link.md", Props{PropShow: "list-link"}},
+		{"1-index|show=LINK-PAGE.md", Props{PropShow: "link-page"}},
 		{"1-gallery|nav|sort=desc|layout=wide.md", Props{PropNav: "", PropSort: SortDesc, PropLayout: "wide"}},
 		{"1-a|desc.md", Props{PropSort: SortDesc}},
 		{"1-a|hid|nidx|noindex|n=x|dsc.md", Props{}},
 		// dropped legacy properties are accepted and ignored
 		{"1-a|crop=10|content|p=3.md", Props{}},
 		{"1-a|prm1|vis|cp|pp=x.md", Props{}},
+		{"1-a|split|nosplit|page|nolist|linkonly.md", Props{}},
 		// no properties at all
 		{"1-a.md", Props{}},
 		// a bracket without properties after it

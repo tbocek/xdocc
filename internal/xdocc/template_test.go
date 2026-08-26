@@ -66,3 +66,15 @@ func TestTemplateNavHTML(t *testing.T) {
 		t.Errorf("nav does not contain News: %s", got)
 	}
 }
+
+// Where an item is shown is readable from a template, as a set of three flags.
+func TestTemplateShow(t *testing.T) {
+	b := newBuild(t, map[string]string{
+		".templates/page.html": `{{ data.Content }}`,
+		".templates/list.html": `{% for x in data.Items %}[{{ x.Show.Page }}{{ x.Show.List }}{{ x.Show.Link }}]{% endfor %}`,
+		"1-a.md":               "a",
+		"2-b|show=list.md":     "b",
+	})
+	b.compile()
+	b.want("index.html", "[truetruetrue][falsetruefalse]")
+}

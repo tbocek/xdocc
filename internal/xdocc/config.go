@@ -18,7 +18,7 @@ const XdoccFile = ".xdocc"
 const TemplateDir = ".templates"
 
 // LoadXdocc reads a .xdocc file. It is YAML, with one extra convenience: a line
-// that is a bare word is taken as a flag, so "nosplit" means "split: false".
+// that is a bare word is taken as a flag, so "nav" means "nav: true".
 // A missing file is not an error.
 func LoadXdocc(path string) (Props, error) {
 	data, err := os.ReadFile(path)
@@ -46,7 +46,7 @@ func parseYAMLProps(data []byte) (Props, error) {
 		}
 		// A bare word is a flag: not indented, not "key: value", not a list
 		// item. It may carry a value ("layout=wide") and several may share a
-		// line, separated like in a filename ("nav|nosplit").
+		// line, separated like in a filename ("nav|show=list-link").
 		if trimmed == line && !strings.Contains(trimmed, ":") && !strings.HasPrefix(trimmed, "-") {
 			for _, token := range strings.Split(trimmed, "|") {
 				if token = strings.TrimSpace(token); token != "" {

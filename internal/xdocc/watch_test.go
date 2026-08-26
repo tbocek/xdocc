@@ -7,6 +7,8 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/fsnotify/fsnotify"
 )
 
 // waitFor polls until the condition holds, so the watcher tests do not depend
@@ -126,5 +128,48 @@ func TestCachePersistsBetweenRuns(t *testing.T) {
 	}
 	if got := b.read("a.html"); !strings.Contains(got, "changed") {
 		t.Errorf("a.html = %q", got)
+	}
+}
+
+// What one file system event costs: a written file is read again on its own,
+// anything that changes the shape of the tree asks for a full walk.
+func TestClassifyEvents(t *testing.T) {
+	b := newBuild(t, map[string]string{
+		".templates/page.html": `{{ data.Content }}`,
+		"1-a.md":               "a",
+	})
+	b.compile()
+	site := b.site
+
+	write := func(name string) fsnotify.Event {
+		return fsnotify.Event{Name: filepath.Join(b.src, filepath.FromSlash(name)), Op: fsnotify.Write}
+	}
+	dirty := func() ([]string, bool) { return site.takeDirty() }
+
+	site.classify(nil, write("1-a.md"))
+	if paths, full := dirty(); full || len(paths) != 1 {
+		t.Errorf("a written file: %v, full=%v, want just that file", paths, full)
+	}
+
+	site.classify(nil, write(XdoccFile))
+	if _, full := dirty(); !full {
+		t.Error("a changed .xdocc should ask for a full walk")
+	}
+
+	site.classify(nil, write(TemplateDir+"/page.html"))
+	if _, full := dirty(); !full {
+		t.Error("a changed template should ask for a full walk")
+	}
+
+	site.classify(nil, fsnotify.Event{Name: filepath.Join(b.src, "2-gone.md"), Op: fsnotify.Remove})
+	if _, full := dirty(); !full {
+		t.Error("a removed file should ask for a full walk")
+	}
+
+	// what a full walk asks for cannot be undone by a single file after it
+	site.Invalidate()
+	site.classify(nil, write("1-a.md"))
+	if _, full := dirty(); !full {
+		t.Error("a pending full walk should survive a later write")
 	}
 }

@@ -286,11 +286,11 @@ func TestCompileBib(t *testing.T) {
 }
 
 // A filename that asks for a page anyway gets one.
-func TestCompileBibSplitOverride(t *testing.T) {
+func TestCompileBibShowPageOverride(t *testing.T) {
 	b := newBuild(t, map[string]string{
-		".templates/page.html": `{{ data.Content }}`,
-		".templates/list.html": `{% for x in data.Items %}{{ x.Content }}{% endfor %}`,
-		"1-refs|split.bib":     `@misc{a, title = {One}, year = {2020}}`,
+		".templates/page.html":           `{{ data.Content }}`,
+		".templates/list.html":           `{% for x in data.Items %}{{ x.Content }}{% endfor %}`,
+		"1-refs|show=page-list-link.bib": `@misc{a, title = {One}, year = {2020}}`,
 	})
 	b.compile()
 	b.want("refs.html", `<div class="citation">"One", 2020. </div>`)

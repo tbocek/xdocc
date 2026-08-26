@@ -149,7 +149,7 @@ func (s *Site) body(item *Item) ([]byte, error) {
 	if item.body != nil {
 		return item.body, nil
 	}
-	data, err := os.ReadFile(item.Source)
+	data, err := s.readSource(item.Source)
 	if err != nil {
 		return nil, err
 	}

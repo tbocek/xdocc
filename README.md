@@ -134,7 +134,7 @@ The text between the `-` and the first `.` or `|` becomes the output filename:
 
 An item whose URL is **`index`** becomes the page of its directory and **replaces the
 generated listing** — `1-index.md`, or `2025-02-17-index[FS25].md`. It is written even
-when splitting is off, because it *is* the directory's page. A plain `index.md` has no
+where `show` leaves `page` out, because it *is* the directory's page. A plain `index.md` has no
 order prefix, so xdocc leaves it alone — it is passed through, and the web server serves
 it as the directory page by itself.
 
@@ -192,12 +192,12 @@ layout: default
 several may share a line the way they do in a filename.
 
 ```
-nosplit
+show=list-link
 nav|layout=wide
 ```
 
 Three properties **never inherit**, because inheriting them is never what you mean:
-`nav`, `name` and `split`. They describe one item. A `.xdocc` may
+`nav`, `name` and `show`. They describe one item. A `.xdocc` may
 still set them — it then describes *its own* directory, not the ones below it:
 
 ```
@@ -233,9 +233,33 @@ place it decides the sort order as well.
 |---|---|---|---|
 | `nav` | flag | directory | include in the navigation tree |
 | `name` | text | any | display name |
-| `nolist` | flag | directory or item | exclude from the parent directory's generated listing and from `.link` pulls alike |
-| `linkonly` | flag | directory or item | exclude from the parent directory's generated listing; `.link` files still pull it in — it shows only where it is explicitly linked |
-| `split` | bool, default `true` | directory or item | `false`: no page of its own — the item appears only inside its directory's `index.html`. On a directory it speaks for the items directly inside it and reaches no deeper, so `nosplit` in the root `.xdocc` folds the front page together without flattening the sections below it |
+| `show` | places joined by `-`, default `page-list-link` | directory or item | where the item is shown — see below |
+
+`show` lists the places an item appears in. There are three, and each one is
+independent of the other two, so they are one set rather than three flags:
+
+| Place | Meaning |
+|---|---|
+| `page` | a page of its own. On a **directory** this speaks for the items directly inside it and reaches no deeper, so `show=list-link` in the root `.xdocc` folds the front page together without flattening the sections below it |
+| `list` | the generated listing of the directory it is in |
+| `link` | what a `.link` file pulls in |
+
+Write the places in any order, joined by `-`: `show=page-link` and `show=link-page`
+are the same thing. What you leave out is what the item stays out of.
+
+```
+show=page-list-link   everywhere — the default, so you never have to write it
+show=list-link        no page of its own: it appears inside its directory's index.html
+show=page-link        out of the listing, but a .link file still pulls it in —
+                      it shows only where you link to it
+show=page             a page nothing links to on its own
+```
+
+A `.bib` defaults to `list-link` instead: a list of citations belongs in a listing and
+has no page to be. `show=page-list-link` on one gives it a page anyway.
+
+A place xdocc does not know is a typo, and xdocc says so and shows the item
+everywhere — losing content to a misspelling is the worse way to be wrong.
 
 ### Settings — inherited down the tree
 
@@ -249,6 +273,9 @@ place it decides the sort order as well.
 | Property | Value | Default | Meaning |
 |---|---|---|---|
 | `symlink` | bool | `true` | symlink assets into the output instead of copying them |
+| `minify` | bool | `true` | minify HTML, CSS, JS, SVG, JSON and XML on the way out |
+| `compress` | bool | `true` | write a `.gz` and a `.br` next to every text file in the output |
+| `rescan` | duration | `10m` | how often the watcher rereads the whole tree even though nothing was reported; `off` disables it |
 
 Assets are symlinked by default. A site whose weight is in its files — a lecture
 folder full of video, a directory of PDFs — is then generated in milliseconds and
@@ -259,12 +286,29 @@ relative to the source stays the same; to ship it standalone, dereference the li
 while copying (`rsync -aL`). Where the file system has no symlinks at all, xdocc
 says so once and copies instead, so this is a preference and not a promise.
 
+Text is **minified** on the way out: every generated page, and the `.css`, `.js`,
+`.svg`, `.json` and `.xml` files beside them. A minified file is one xdocc wrote rather
+than one it points at, so those are written into the output even where `symlink` is on
+— everything else, which is where the weight of a site is, is still a link. A file the
+minifier cannot parse is written unchanged with a word in the log, so a single
+malformed SVG cannot take a build down. `minify: false` turns it off.
+
+Every text output also gets a **`.gz` and a `.br`** beside it, at the highest setting
+gzip and brotli have: a static site is compressed once and served many times, so the
+time belongs in the build and not in the request. Web servers pick the files up by
+themselves — `precompressed br gzip` in Caddy, `gzip_static on` with `ngx_brotli` in
+nginx. Files under 256 bytes are skipped, and so are the formats that are compressed
+already: images, video, PDFs, archives. `compress: false` turns it off.
+
+If the source tree still holds `.gz` or `.br` files from an earlier build, next to the
+file they belong to, xdocc ignores them and says so — it writes those paths itself now.
+
 ### Legacy spellings
 
-One property, one word, with three short forms kept because they read better than
+One property, one word, with two short forms kept because they read better than
 what they stand for:
 
-`nosplit`, `page` → `split=false` · `l` → `layout` · `asc`, `desc` → `sort=…`
+`l` → `layout` · `asc`, `desc` → `sort=…`
 
 Everything else that used to be a property is accepted and ignored, so an old tree
 still compiles:
@@ -278,7 +322,10 @@ still compiles:
 | `date` in front matter | the date in the filename |
 | `post-processing`, `pp` | whatever starts xdocc: `ExecStartPost=`, a wrapper script, a `Makefile` |
 | `noindex`, `nidx` | leave the order prefix off the directory: it then has pages and no listing, and nothing links to a page that is not there |
-| `n`, `pag`, `dsc` | the words they abbreviated: `name`, `nosplit`, `desc` |
+| `split`, `nosplit`, `page` | `show`: `nosplit` and `page` are `show=list-link`, `split` is the default |
+| `nolist` | `show=page` |
+| `linkonly` | `show=page-link` |
+| `n`, `pag`, `dsc` | the words they abbreviated: `name`, `page`, `desc` |
 | `content`, `paging`, `crop`, `dir-command`, `command-odt` … | — |
 
 ---
@@ -292,13 +339,13 @@ A directory with an order prefix writes two things: a **listing** (`index.html`)
 |---|---|---|
 | `3-news/` | generated | yes |
 | `3-news/` containing `1-index.md` | **that file, instead of the generated one** | yes |
-| `3-news\|nosplit/` | generated | no |
+| `3-news\|show=list-link/` | generated | no |
 | `news/` — no order prefix | none | yes — each name inside is still judged on its own |
 
 Reach for `1-index.md` first: writing the directory's page yourself is what people
 usually mean, and it is the one that leaves the items reachable.
 
-### Splitting
+### Where an item is shown
 
 By default each content item becomes its own page **and** appears in its directory's
 `index.html`:
@@ -309,17 +356,18 @@ By default each content item becomes its own page **and** appears in its directo
 └── 2025-01-10-launch.md   ──►  news/launch.html   +  entry in news/index.html
 ```
 
-With `nosplit` in `1-news/.xdocc`, the individual pages are not written and everything
-lands in `news/index.html`. It applies to that directory only and does not reach the
-directories below it, so `nosplit` in the root `.xdocc` gives you a front page that is
-one long scroll while the sections keep their own pages.
+With `show=list-link` in `1-news/.xdocc`, the individual pages are not written and
+everything lands in `news/index.html`. It applies to that directory only and does not
+reach the directories below it, so `show=list-link` in the root `.xdocc` gives you a
+front page that is one long scroll while the sections keep their own pages.
 
-`split` also works on a single item — `0-title|nosplit.md` contributes to the index but
-gets no page of its own. A `.bib` never splits unless you ask it to with `|split`: a
-list of citations belongs in a listing and has no page to be. So a directory of
-`2006-pub[2006].bib` … `2024-pub[2024].bib` is one publication page, one heading per
-year. Templates should link to items with `.Link`, which points at
-the item's own page when it has one and at its directory's index when it has not.
+`show` works on a single item just as well — `0-title|show=list-link.md` contributes to
+the index but gets no page of its own. A `.bib` is `list-link` from the start unless you
+ask for a page with `|show=page-list-link`, so a directory of `2006-pub[2006].bib` …
+`2024-pub[2024].bib` is one publication page, one heading per year.
+
+Templates should link to items with `.Link`, which points at the item's own page when it
+has one and at its directory's index when it has not.
 
 ---
 
@@ -400,11 +448,11 @@ Available in every template (bound as `data`):
 | listing | `data.Items` `data.ItemsByURL` |
 | navigation | `data.GlobalNav` `data.CurrentNav` `data.Breadcrumb` |
 | paths | `data.Root` — the way back to the site root from the page being rendered, `""` or `"../../"` |
-| flags | `data.IsDir` `data.IsIndex` `data.IsNav` `data.IsTransformed` `data.Split` |
+| flags | `data.IsDir` `data.IsIndex` `data.IsNav` `data.IsTransformed` `data.Show.Page` `data.Show.List` `data.Show.Link` |
 
 `data.URL` is the file an item produces, relative to the site root
 (`docs/about.html`); `data.Link` is where to link to it, which differs only for
-items that do not split. Write links as `{{ data.Root }}{{ data.Link }}`.
+items without a page of their own. Write links as `{{ data.Root }}{{ data.Link }}`.
 
 A navigation entry has `.Name`, `.Path` (`docs/api`), `.URL` (`docs/api/index.html`),
 `.Href` (ready to use in the page being rendered), `.Active` (the current page is in
@@ -465,6 +513,35 @@ With `-w`, xdocc stays running and watches the source tree recursively, includin
 `.templates` and every `.xdocc`. Changes are collected for 200 ms before it recompiles,
 so an editor writing a burst of files causes one build.
 
+### What a change costs
+
+A running xdocc keeps the item tree, the rendered HTML and the state of the output tree
+in memory, so a rebuild reads only what moved:
+
+| The watcher reports | xdocc does |
+|---|---|
+| a file was written | rereads that one file |
+| a file appeared, vanished or was renamed | walks the source tree again |
+| a `.xdocc` or a template changed | walks the source tree again |
+| the kernel's watch queue overflowed | walks the source tree again |
+| nothing at all, once per `rescan` | walks the source tree again |
+
+Everything is *rendered* again either way. Rendering from memory is cheap, and it is
+what keeps a page from going stale because of a file it does not contain; only the disk
+is narrowed. On the site under `old/site` — 2600 files, 91 GB, 3000 outputs — editing
+one markdown file is a 33 ms rebuild that writes three files.
+
+File system notifications are best effort: a network share, a container bind mount, or
+a burst that overran the kernel queue can swallow one, and then a page stays stale until
+someone touches it again. `rescan` is the backstop. Every ten minutes by default xdocc
+walks the whole tree whether or not anything was reported, and finding nothing costs
+nothing. Set `rescan: 30m` or `rescan: off` in the root `.xdocc`; it is read once, at
+startup.
+
+The output tree is xdocc's to keep. It remembers what it put at every path, which is
+what spares it stating every symlink and reading back every page on every build. Change
+the output from outside and xdocc will not notice until it is restarted.
+
 ### What is cached
 
 Only what a handler produces from one file, and only because it cannot depend on
@@ -497,9 +574,22 @@ exist are dropped at the end of each run.
 ### Writing and cleanup
 
 Output is only written when it actually differs, so unchanged pages keep their
-modification time and `rsync` has little to do. Output that this run did not produce is
-deleted, so removing or renaming a source file removes its old page. Two sources that
-would write the same file are reported as a warning.
+modification time and `rsync` has little to do. Compressing is the one expensive thing
+in a build, so a `.gz` and a `.br` are only rebuilt when the bytes under them moved.
+Output that this run did not produce is deleted, so removing or renaming a source file
+removes its old page. Two sources that would write the same file are reported as a
+warning.
+
+Every run says what it did:
+
+```
+xdocc: 3 written, 2979 unchanged (61 pages, 2921 assets)
+```
+
+Pages and assets are what the site is made of, compressed copies counted as assets;
+written and unchanged are what this run had to touch. While watching, the line appears
+only when something really was written or removed, so a quiet tree stays quiet in the
+log.
 
 ---
 

@@ -2,6 +2,7 @@ package xdocc
 
 import (
 	"crypto/sha256"
+	"log"
 	"os"
 	"path/filepath"
 	"sort"
@@ -38,6 +39,7 @@ type Item struct {
 	FileSize int64
 	ModTime  time.Time
 
+	show  Show        // where the item is shown, parsed once from its properties
 	body  []byte      // file content without the front matter, read during the walk
 	cache *CacheEntry // this item's slot in the cache, nil when not cached
 }
@@ -74,35 +76,54 @@ func (i *Item) IsNav() bool {
 	return ok && v
 }
 
-// Split reports whether the item gets a page of its own. On a directory it
-// speaks for the items directly inside it; it is not inherited any deeper, so
-// "nosplit" at the root folds the front page together without touching the
-// sections below it.
-func (i *Item) Split() bool {
-	if v, ok := i.Props.Bool(PropSplit); ok {
-		return v
+// Show is where an item is shown. The three places are independent of each
+// other, which is why they are one set and not three separate flags.
+type Show struct {
+	Page bool // on a page of its own
+	List bool // in the generated listing of its directory
+	Link bool // in what a .link file pulls in
+}
+
+// Show reports where this item is shown, as written by the "show" property.
+// On a directory, Page speaks for the items directly inside it - the directory
+// keeps its own index page either way - while List and Link speak for the
+// directory itself.
+func (i *Item) Show() Show { return i.show }
+
+// showAll is the default: an item is shown everywhere unless it says otherwise.
+var showAll = Show{Page: true, List: true, Link: true}
+
+// parseShow reads the "show" property: the places, joined by "-", in any order.
+// A .bib is a list of citations rather than a document, so it has nothing to
+// put on a page of its own and stays out of one unless it is asked for.
+func parseShow(props Props, handler string, where string) Show {
+	fallback := showAll
+	if handler == HandlerBib {
+		fallback.Page = false
 	}
-	// A .bib is a list of citations, not a document. It belongs in a listing
-	// and has nothing to put on a page of its own, so it does not ask for one
-	// unless the filename says otherwise.
-	return i.name.Handler != HandlerBib
-}
-
-// Nolist reports whether the item keeps itself out of its parent directory's
-// generated listing and out of .link pulls alike: it never shows up on its
-// own. LinkOnly is the counterpart - out of the listing, but still pulled in
-// by .link files.
-func (i *Item) Nolist() bool {
-	v, ok := i.Props.Bool(PropNolist)
-	return ok && v
-}
-
-// LinkOnly reports whether the item stays out of its parent directory's
-// generated listing but is still pulled in by .link files: it shows only
-// where it is explicitly linked.
-func (i *Item) LinkOnly() bool {
-	v, ok := i.Props.Bool(PropLinkOnly)
-	return ok && v
+	value, ok := props[PropShow]
+	if !ok || value == "" {
+		return fallback
+	}
+	var show Show
+	for _, part := range strings.Split(value, "-") {
+		switch strings.TrimSpace(part) {
+		case "page":
+			show.Page = true
+		case "list":
+			show.List = true
+		case "link":
+			show.Link = true
+		case "":
+			// a stray separator, e.g. "page--link"
+		default:
+			// Falling back to the default keeps the content visible, which is
+			// the safer way to be wrong about a typo.
+			log.Printf("xdocc: %s: show=%q: unknown place %q, showing it everywhere", where, value, part)
+			return fallback
+		}
+	}
+	return show
 }
 
 // Layout is the free-form layout hint handed to templates.
@@ -110,12 +131,12 @@ func (i *Item) Layout() string { return i.Props[PropLayout] }
 
 // Link is where this item is reachable, relative to the site root. It is the
 // item's own page when it has one, and the index of its directory when it has
-// not, which is what an item that does not split ends up in.
+// not, which is where an item without a page of its own ends up.
 func (i *Item) Link() string {
 	if i.IsDir || !i.IsTransformed() {
 		return i.URL
 	}
-	if i.Split() && !i.IsIndex() {
+	if i.show.Page && !i.IsIndex() {
 		return i.URL
 	}
 	return i.Parent.URL
@@ -318,6 +339,8 @@ func (s *Site) newDir(dir string, parent *Item) (*Item, error) {
 	}
 	item.Nr = item.name.Order
 	item.Date = item.name.Date
+	item.show = parseShow(item.Props, item.Handler(), item.Rel)
+	s.remember(item)
 	return item, nil
 }
 
@@ -349,7 +372,9 @@ func (s *Site) newFile(file string, parent *Item) (*Item, error) {
 		case HandlerMarkdown, HandlerHTML, HandlerLink, HandlerBib:
 			rel := filepath.ToSlash(item.Rel)
 			s.alive[rel] = true
-			data, err := os.ReadFile(file)
+			// Read even on a cache hit: the hash that decides the hit is of
+			// these bytes, so there is no way to know without them.
+			data, err := s.readSource(file)
 			if err != nil {
 				return nil, err
 			}
@@ -377,7 +402,17 @@ func (s *Site) newFile(file string, parent *Item) (*Item, error) {
 	item.URL = parent.Dir + item.name.FileName(item.IsTransformed())
 	item.Nr = item.name.Order
 	item.Date = item.name.Date
+	item.show = parseShow(item.Props, item.Handler(), item.Rel)
+	s.remember(item)
 	return item, nil
+}
+
+// remember files the item under its path from the source root, so that a change
+// reported by the watcher can be turned back into a node of the tree.
+func (s *Site) remember(item *Item) {
+	if s.byRel != nil {
+		s.byRel[filepath.ToSlash(item.Rel)] = item
+	}
 }
 
 // isExcluded keeps the generated tree, the templates and the cache out of the

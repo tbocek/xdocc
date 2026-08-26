@@ -10,16 +10,17 @@ func TestLoadXdoccBareWords(t *testing.T) {
 		in    string
 		props Props
 	}{
-		{"nosplit\n", Props{PropSplit: "false"}},
-		{"# a comment\n\nnosplit\nsymlink\n", Props{PropSplit: "false", PropSymlink: ""}},
-		{"split: false\nlayout: wide\n", Props{PropSplit: "false", PropLayout: "wide"}},
+		{"show=list-link\n", Props{PropShow: "list-link"}},
+		{"# a comment\n\nshow=list-link\nsymlink\n", Props{PropShow: "list-link", PropSymlink: ""}},
+		{"show: list-link\nlayout: wide\n", Props{PropShow: "list-link", PropLayout: "wide"}},
 		{"symlink: true\n", Props{PropSymlink: ""}},
 		{"symlink: false\n", Props{PropSymlink: "false"}},
-		{"nav|nosplit\n", Props{PropNav: "", PropSplit: "false"}},
+		{"nav|show=list-link\n", Props{PropNav: "", PropShow: "list-link"}},
 		{"layout=wide\n", Props{PropLayout: "wide"}},
 		// dropped legacy keys are accepted and ignored
 		{"post-processing: rsync -a . host:/var/www\n", Props{}},
 		{"promote\nvisible\ncopy\n", Props{}},
+		{"nosplit\nnolist\nlinkonly\n", Props{}},
 		{"", Props{}},
 	}
 	for _, tt := range tests {

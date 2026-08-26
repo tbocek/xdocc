@@ -36,12 +36,12 @@ func TestSettingsPrecedence(t *testing.T) {
 }
 
 func TestStructuralPropertiesDoNotInherit(t *testing.T) {
-	// nav, name and split describe one item and must not leak into the items
+	// nav, name and show describe one item and must not leak into the items
 	// below it
 	b := newBuild(t, map[string]string{
 		".templates/page.html": `{{ data.Content }}`,
 		".templates/list.html": `{% for x in data.GlobalNav %}[{{ x.Path }}({% for c in x.Children %}[{{ c.Path }}]{% endfor %})]{% endfor %}`,
-		"1-dir/.xdocc":         "nav\nname: A directory\nnosplit\npromote\n",
+		"1-dir/.xdocc":         "nav\nname: A directory\nshow=list-link\npromote\n",
 		"1-dir/1-a.md":         "a",
 		"1-dir/2-sub/1-b.md":   "b",
 	})
@@ -49,10 +49,10 @@ func TestStructuralPropertiesDoNotInherit(t *testing.T) {
 	// the .xdocc marks its own directory, not the one below it
 	b.want("dir/sub/index.html", "[dir()]")
 	if b.exists("dir/a.html") {
-		t.Error("nosplit was ignored: dir/a.html exists")
+		t.Error("show=list-link was ignored: dir/a.html exists")
 	}
 	if !b.exists("dir/sub/b.html") {
-		t.Error("nosplit leaked into dir/sub")
+		t.Error("show=list-link leaked into dir/sub")
 	}
 }
 
@@ -102,14 +102,14 @@ func TestSymlinkIsSiteWide(t *testing.T) {
 	}
 }
 
-// nosplit says how one directory presents its own items. It must not reach the
+// show says how one directory presents its own items. It must not reach the
 // sections below it: the front page of a site is often one long page while its
 // sections are not.
-func TestSplitIsNotInherited(t *testing.T) {
+func TestShowIsNotInherited(t *testing.T) {
 	b := newBuild(t, map[string]string{
 		".templates/page.html": `{{ data.Content }}`,
 		".templates/list.html": listTemplate,
-		".xdocc":               "nosplit\n",
+		".xdocc":               "show=list-link\n",
 		"1-intro.md":           "intro",
 		"2-news/1-first.md":    "first",
 	})
@@ -117,7 +117,7 @@ func TestSplitIsNotInherited(t *testing.T) {
 
 	// the root folds its items into the front page
 	if b.exists("intro.html") {
-		t.Error("intro.html was written although the root says nosplit")
+		t.Error("intro.html was written although the root says show=list-link")
 	}
 	// the section below it does not
 	b.want("news/first.html", "<p>first</p>")

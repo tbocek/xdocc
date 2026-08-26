@@ -8,28 +8,27 @@ import (
 // Canonical property names.
 const (
 	// structural, never inherited
-	PropNav      = "nav"
-	PropName     = "name"
-	PropNolist   = "nolist"
-	PropLinkOnly = "linkonly"
-	PropSplit    = "split"
+	PropNav  = "nav"
+	PropName = "name"
+	PropShow = "show"
 
 	// settings, inherited down the tree
 	PropLayout = "layout"
 	PropSort   = "sort"
 
 	// site settings, root .xdocc only
-	PropSymlink = "symlink"
+	PropSymlink  = "symlink"
+	PropMinify   = "minify"
+	PropCompress = "compress"
+	PropRescan   = "rescan"
 )
 
 // structural properties describe a single item and are never inherited from a
 // parent .xdocc.
 var structural = map[string]bool{
-	PropNav:      true,
-	PropName:     true,
-	PropNolist:   true,
-	PropLinkOnly: true,
-	PropSplit:    true,
+	PropNav:  true,
+	PropName: true,
+	PropShow: true,
 }
 
 // alias maps a legacy spelling to a canonical key, optionally forcing a value.
@@ -39,14 +38,12 @@ type alias struct {
 	fixed bool
 }
 
-// One spelling per property, and one alias each where the short form is what
-// the tree already says: "l=" for layout, "nosplit" and "page" for split.
+// One spelling per property, plus the short forms the tree already says:
+// "l=" for layout, "asc"/"desc" for sort.
 var aliases = map[string]alias{
-	"l":       {key: PropLayout},
-	"nosplit": {key: PropSplit, value: "false", fixed: true},
-	"page":    {key: PropSplit, value: "false", fixed: true},
-	"asc":     {key: PropSort, value: SortAsc, fixed: true},
-	"desc":    {key: PropSort, value: SortDesc, fixed: true},
+	"l":    {key: PropLayout},
+	"asc":  {key: PropSort, value: SortAsc, fixed: true},
+	"desc": {key: PropSort, value: SortDesc, fixed: true},
 }
 
 // dropped properties are accepted and ignored, so old trees still compile.
@@ -63,6 +60,10 @@ var dropped = map[string]bool{
 	"visible": true, "vis": true,
 	"promote": true, "prm": true, "prm1": true, "promote1": true,
 	"post-processing": true, "pp": true,
+	// the three booleans that "show" replaced: split/nosplit/page said whether
+	// an item got a page, nolist and linkonly where it appeared
+	"split": true, "nosplit": true, "page": true,
+	"nolist": true, "linkonly": true,
 	"content": true, "cont": true,
 	"paging": true, "p": true,
 	"crop":        true,
@@ -103,7 +104,7 @@ func (p Props) Set(key, value string) {
 			value = a.value
 		}
 	}
-	if key == PropSort {
+	if key == PropSort || key == PropShow {
 		value = strings.ToLower(strings.TrimSpace(value))
 	}
 	p[key] = value

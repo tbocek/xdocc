@@ -65,11 +65,11 @@ func main() {
 	site.SetCache(cache)
 
 	if !*watch {
-		written, err := site.Compile()
+		result, err := site.Compile()
 		if err != nil {
 			log.Fatalf("xdocc: %v", err)
 		}
-		log.Printf("xdocc: %d files written", written)
+		log.Printf("xdocc: %s", result)
 		return
 	}
 

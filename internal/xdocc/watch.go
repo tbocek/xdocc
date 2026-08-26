@@ -2,6 +2,7 @@ package xdocc
 
 import (
 	"context"
+	"errors"
 	"log"
 	"os"
 	"path/filepath"
@@ -27,15 +28,25 @@ func (s *Site) Watch(ctx context.Context) error {
 		return err
 	}
 
-	if written, err := s.Compile(); err != nil {
+	if result, err := s.Compile(); err != nil {
 		log.Printf("xdocc: %v", err)
 	} else {
-		log.Printf("xdocc: %d files written", written)
+		log.Printf("xdocc: %s", result)
 	}
 
 	timer := time.NewTimer(debounce)
 	if !timer.Stop() {
 		<-timer.C
+	}
+
+	// The rescan is read from the root .xdocc, which the first compile has just
+	// read, and it stands for the life of the process.
+	var rescan <-chan time.Time
+	if every := s.Rescan(); every > 0 {
+		ticker := time.NewTicker(every)
+		defer ticker.Stop()
+		rescan = ticker.C
+		log.Printf("xdocc: rescanning the whole tree every %s", every)
 	}
 	for {
 		select {
@@ -53,27 +64,57 @@ func (s *Site) Watch(ctx context.Context) error {
 			if s.isExcluded(event.Name) {
 				continue
 			}
-			if event.Has(fsnotify.Create) {
-				if info, err := os.Stat(event.Name); err == nil && info.IsDir() {
-					_ = s.addWatches(watcher, event.Name)
-				}
-			}
+			s.classify(watcher, event)
 			timer.Reset(debounce)
 		case err, ok := <-watcher.Errors:
 			if !ok {
 				return nil
 			}
+			if errors.Is(err, fsnotify.ErrEventOverflow) {
+				// The kernel queue ran over, so what changed is no longer
+				// knowable. Everything is suspect; read the tree again.
+				log.Printf("xdocc: the watch queue overflowed, rereading the whole tree")
+				s.Invalidate()
+				timer.Reset(debounce)
+				continue
+			}
 			log.Printf("xdocc: watch: %v", err)
+		case <-rescan:
+			s.Invalidate()
+			timer.Reset(debounce)
 		case <-timer.C:
 			start := time.Now()
-			written, err := s.Compile()
+			result, err := s.Compile()
 			if err != nil {
 				log.Printf("xdocc: %v", err)
 				continue
 			}
-			log.Printf("xdocc: %d files written in %s", written, time.Since(start).Round(time.Millisecond))
+			if result.Written == 0 && result.Removed == 0 {
+				continue // nothing to say: a rescan that found nothing
+			}
+			log.Printf("xdocc: %s in %s", result, time.Since(start).Round(time.Millisecond))
 		}
 	}
+}
+
+// classify decides what one file system event costs. A file that was written is
+// read again on its own; anything that changes the shape of the tree or the way
+// it is rendered - a file appearing or vanishing, a changed .xdocc, a changed
+// template - is beyond patching and asks for a full walk.
+func (s *Site) classify(watcher *fsnotify.Watcher, event fsnotify.Event) {
+	if event.Has(fsnotify.Create) || event.Has(fsnotify.Remove) || event.Has(fsnotify.Rename) {
+		if info, err := os.Stat(event.Name); err == nil && info.IsDir() {
+			_ = s.addWatches(watcher, event.Name)
+		}
+		s.Invalidate()
+		return
+	}
+	dir := filepath.Dir(event.Name)
+	if filepath.Base(event.Name) == XdoccFile || dir == filepath.Join(s.Source, TemplateDir) {
+		s.Invalidate()
+		return
+	}
+	s.Touch(event.Name)
 }
 
 // addWatches watches dir and everything below it, output directory excluded.
