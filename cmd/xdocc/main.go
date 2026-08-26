@@ -77,7 +77,7 @@ func main() {
 
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
-	log.Printf("xdocc: watching %s", site.Source)
+	// Watch says what it is watching once it knows how often it will reread it.
 	if err := site.Watch(ctx); err != nil {
 		log.Fatalf("xdocc: %v", err)
 	}

@@ -3,6 +3,7 @@ package xdocc
 import (
 	"context"
 	"errors"
+	"fmt"
 	"log"
 	"os"
 	"path/filepath"
@@ -44,14 +45,17 @@ func (s *Site) Watch(ctx context.Context) error {
 	}
 
 	// The rescan is read from the root .xdocc, which the first compile has just
-	// read, and it stands for the life of the process.
+	// read, and it stands for the life of the process. What is being watched and
+	// how often it is reread are one fact, so they are one line.
 	var rescan <-chan time.Time
+	watching := fmt.Sprintf("xdocc: watching %s", s.Source)
 	if every := s.Rescan(); every > 0 {
 		ticker := time.NewTicker(every)
 		defer ticker.Stop()
 		rescan = ticker.C
-		log.Printf("xdocc: rescanning the whole tree every %s", every)
+		watching += fmt.Sprintf(", rereading the whole tree every %s", every)
 	}
+	log.Print(watching)
 	for {
 		select {
 		case <-ctx.Done():
