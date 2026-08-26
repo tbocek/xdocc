@@ -302,23 +302,9 @@ nginx. Files under 256 bytes are skipped, and so are the formats that are compre
 already: images, video, PDFs, archives. `compress: false` turns it off.
 
 If the source tree still holds `.gz` or `.br` files from an earlier build, next to the
-file they belong to, xdocc ignores them and says so once, because they are dead weight:
-it writes those paths itself now, so the copies in the source are never read and can be
-deleted. It is a fact about the tree, not something the run did — an unchanged file
-keeps the compressed copies it already has.
-It says so in **one line**, once. Workers find them in whatever order the pool hands
-them out, so a line per file would arrive scattered through the build and in no fixed
-order; instead the run collects them, waits for the workers, sorts what they found and
-says it at the end:
-
-```
-xdocc: 13 compressed copies in the source tree are ignored, xdocc writes those paths itself; they can be deleted: design/dsl-icon.svg.br, design/dsl-logo.svg.br, ...
-```
-
-Find one and it is named on its own. Nothing is said on the rebuilds after that: each
-copy is derived from the file beside it, so as long as that file has not moved there is
-nothing new to report. It is said again when the file it comes from changes, and again
-at the next start, so a fresh log still describes the tree.
+file they belong to, xdocc ignores them: it writes those paths itself now, so the copies
+in the source are never read. Nothing is said about it — the build is neither wrong nor
+in doubt because of them — but they are dead weight and can be deleted.
 
 ### Legacy spellings
 

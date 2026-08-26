@@ -151,7 +151,9 @@ func TestCompressOff(t *testing.T) {
 }
 
 // A .br left in the source tree next to the file it belongs to is a build
-// artefact, not content: xdocc writes that path itself now.
+// artefact, not content: xdocc writes that path itself now. It is nothing to
+// report - the build is neither wrong nor in doubt because of it - so it is
+// passed over without a word.
 func TestCompressIgnoresSidecarsInTheSource(t *testing.T) {
 	b := newBuild(t, map[string]string{
 		".templates/page.html": `{{ data.Content }}`,
@@ -160,13 +162,21 @@ func TestCompressIgnoresSidecarsInTheSource(t *testing.T) {
 		"lonely.txt.br":        "kept",
 	})
 	b.xdocc("") // nothing set: minifying and compressing are the default
+
+	var buf bytes.Buffer
+	log.SetOutput(&buf)
+	defer log.SetOutput(os.Stderr)
 	b.compile()
+
 	if got := unbrotli(t, b.raw("logo.svg.br")); !strings.Contains(got, "svg") {
 		t.Errorf("logo.svg.br is the stale source copy: %q", got)
 	}
 	// one without the file it belongs to is just a file, and is passed through
 	if !b.exists("lonely.txt.br") {
 		t.Error("lonely.txt.br should have been passed through")
+	}
+	if buf.Len() != 0 {
+		t.Errorf("the build said something about a quiet tree: %q", buf.String())
 	}
 }
 
@@ -329,92 +339,5 @@ func TestOutputSettingsSwitchMidRun(t *testing.T) {
 	}
 	if b.exists("notes.txt.gz") || b.exists("notes.txt.br") {
 		t.Error("the compressed copies should have been cleaned up")
-	}
-}
-
-// A .gz or .br left in the source tree is worth saying once. Repeating it on
-// every rebuild would bury the log, so it is only said again when the file it
-// is derived from has changed.
-func TestSidecarInTheSourceIsReportedOnce(t *testing.T) {
-	b := newBuild(t, map[string]string{
-		".templates/page.html": `{{ data.Content }}`,
-		"logo.svg":             "<svg>" + filler + "</svg>",
-		"logo.svg.br":          "stale",
-	})
-	b.xdocc("") // minifying and compressing are the default
-
-	site, err := NewSite(b.src, b.gen)
-	if err != nil {
-		t.Fatal(err)
-	}
-	site.SetCache(b.cache)
-
-	var buf bytes.Buffer
-	log.SetOutput(&buf)
-	defer log.SetOutput(os.Stderr)
-
-	said := func() int {
-		return strings.Count(buf.String(), "logo.svg.br in the source tree is ignored")
-	}
-	compile := func() {
-		t.Helper()
-		site.Invalidate() // a full walk, the way a restarted watcher does it
-		if _, err := site.Compile(); err != nil {
-			t.Fatal(err)
-		}
-	}
-
-	compile()
-	if said() != 1 {
-		t.Fatalf("the first run said it %d times, want 1", said())
-	}
-
-	compile()
-	compile()
-	if said() != 1 {
-		t.Errorf("said %d times after three runs, want 1: %s", said(), buf.String())
-	}
-
-	// the file it is derived from changed, so it is worth mentioning again
-	b.file("logo.svg", "<svg>changed"+filler+"</svg>")
-	compile()
-	if said() != 2 {
-		t.Errorf("said %d times after the svg changed, want 2: %s", said(), buf.String())
-	}
-}
-
-// However many workers find one, what they found is said in one line at the end
-// of the run rather than a line at a time from whichever worker got there
-// first, and in a fixed order so two runs of the same tree read the same.
-func TestSidecarsInTheSourceAreReportedInOneLine(t *testing.T) {
-	b := newBuild(t, map[string]string{
-		".templates/page.html": `{{ data.Content }}`,
-		"c.svg":                "<svg>" + filler + "</svg>",
-		"c.svg.br":             "stale",
-		"a.css":                "body{}" + filler,
-		"a.css.gz":             "stale",
-		"b.js":                 "var x=1;" + filler,
-		"b.js.br":              "stale",
-	})
-	b.xdocc("workers: 4\n") // several at once, to scatter the order they are found in
-
-	var buf bytes.Buffer
-	log.SetOutput(&buf)
-	defer log.SetOutput(os.Stderr)
-	b.compile()
-
-	lines := 0
-	for _, line := range strings.Split(strings.TrimSpace(buf.String()), "\n") {
-		if strings.Contains(line, "in the source tree are ignored") {
-			lines++
-			want := "3 compressed copies in the source tree are ignored, xdocc writes " +
-				"those paths itself; they can be deleted: a.css.gz, b.js.br, c.svg.br"
-			if !strings.Contains(line, want) {
-				t.Errorf("the line reads %q, want it to contain %q", line, want)
-			}
-		}
-	}
-	if lines != 1 {
-		t.Errorf("%d lines were said about the copies, want 1: %s", lines, buf.String())
 	}
 }

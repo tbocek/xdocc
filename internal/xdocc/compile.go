@@ -111,11 +111,6 @@ type compiler struct {
 	// Only the walk goroutine touches it, so it needs no lock.
 	claimed map[string]bool
 
-	// staleSidecars collects the .gz and .br files found in the source tree,
-	// to be said once when the workers are done rather than one line at a time
-	// from whichever worker happened to find one.
-	staleSidecars []string
-
 	// noSymlink is set once symlinking has failed, so a file system without
 	// symlinks costs one failed attempt and not one per file.
 	noSymlink bool
@@ -215,7 +210,6 @@ func (s *Site) Compile() (Result, error) {
 	if err := c.pool.wait(); err != nil && walkErr == nil {
 		walkErr = err
 	}
-	c.reportSidecars()
 	if walkErr != nil {
 		return c.result(), walkErr
 	}
@@ -632,11 +626,8 @@ func (c *compiler) copyAsset(item *Item) error {
 	// A .gz or .br next to the file it belongs to is a build artefact that
 	// xdocc now keeps itself. Passing it through would write the same output
 	// path twice, once from the source and once from the compressor.
-	if c.site.Compress() {
-		if base, ok := sidecarBase(item); ok {
-			c.noteSidecar(item, base)
-			return nil
-		}
+	if c.site.Compress() && isSidecarOf(item) {
+		return nil
 	}
 	if _, ok := minifyType[strings.ToLower(path.Ext(item.URL))]; ok && c.site.Minify() {
 		return c.place(item.URL, item, func() ([]byte, error) {
@@ -671,60 +662,20 @@ func (c *compiler) copyAsset(item *Item) error {
 	return c.sidecars(target, data, data != nil)
 }
 
-// sidecarBase reports whether the file is the compressed copy of a file next to
-// it - something a previous build, xdocc or another, left behind - and returns
-// the file it was made from.
-func sidecarBase(item *Item) (os.FileInfo, bool) {
+// isSidecarOf reports whether the file is the compressed copy of a file next to
+// it - something a previous build, xdocc or another, left behind. xdocc writes
+// that output path itself, so the copy in the source is simply not read.
+func isSidecarOf(item *Item) bool {
 	for _, e := range encoders {
 		base, ok := strings.CutSuffix(item.FileName, e.suffix)
 		if !ok || !compressExt[strings.ToLower(path.Ext(base))] {
 			continue
 		}
-		if info, err := os.Stat(filepath.Join(filepath.Dir(item.Source), base)); err == nil {
-			return info, true
+		if _, err := os.Stat(filepath.Join(filepath.Dir(item.Source), base)); err == nil {
+			return true
 		}
 	}
-	return nil, false
-}
-
-// noteSidecar records that a .gz or .br in the source tree is one xdocc writes
-// itself now, so the copy in the source is dead weight, for reportSidecars to
-// say when the run is done. It says nothing about this run having written it:
-// an unchanged file keeps the compressed copies it already has. The copy is derived from
-// the file beside it, so as long as that file has not moved there is nothing
-// new to note - repeating it on every rebuild would bury everything else in the
-// log. It is noted again when the file it comes from changes, which is when
-// someone might act on it, and again on the next start, so a fresh log still
-// describes the tree.
-func (c *compiler) noteSidecar(item *Item, base os.FileInfo) {
-	now := stampOf(base)
-	rel := filepath.ToSlash(item.Rel)
-
-	c.mu.Lock()
-	defer c.mu.Unlock()
-	if was, seen := c.site.reported[rel]; seen && was.same(now) {
-		return
-	}
-	c.site.reported[rel] = now
-	c.staleSidecars = append(c.staleSidecars, rel)
-}
-
-// reportSidecars says in one line what the workers found. They run in whatever
-// order the pool gives them, so a line per file would arrive scattered through
-// the build and in no fixed order; this waits until they are all done, sorts
-// what they found and says it once. Called after the pool is drained.
-func (c *compiler) reportSidecars() {
-	found := c.staleSidecars
-	if len(found) == 0 {
-		return
-	}
-	sort.Strings(found)
-	if len(found) == 1 {
-		log.Printf("xdocc: %s in the source tree is ignored, xdocc writes that path itself; it can be deleted", found[0])
-		return
-	}
-	log.Printf("xdocc: %d compressed copies in the source tree are ignored, xdocc writes those paths itself; they can be deleted: %s",
-		len(found), strings.Join(found, ", "))
+	return false
 }
 
 // linkAsset points the output at the source instead of duplicating it, and

@@ -37,11 +37,6 @@ type Site struct {
 	// memory above worthless.
 	placedWith outputFlags
 
-	// reported remembers the .gz and .br files found in the source tree that
-	// xdocc has already spoken about, against the file each one is derived
-	// from as it was then. Saying it again on every rebuild would bury the log.
-	reported map[string]fileStamp
-
 	// reads counts the source files this run took off the disk, as opposed to
 	// the ones the cache or the tree in memory answered for. It is an atomic
 	// because the files are read by whichever worker got to them.
@@ -79,11 +74,10 @@ func NewSite(source, gen string) (*Site, error) {
 		}
 	}
 	s := &Site{
-		Source:   source,
-		Gen:      gen,
-		placed:   map[string]placement{},
-		dirty:    map[string]bool{},
-		reported: map[string]fileStamp{},
+		Source: source,
+		Gen:    gen,
+		placed: map[string]placement{},
+		dirty:  map[string]bool{},
 	}
 	if gen != "" {
 		s.excluded = append(s.excluded, gen)

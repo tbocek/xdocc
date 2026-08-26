@@ -4,7 +4,6 @@ import (
 	"bytes"
 	"compress/gzip"
 	"log"
-	"os"
 	"path"
 	"strings"
 	"time"
@@ -117,17 +116,6 @@ func brotliBytes(data []byte) ([]byte, error) {
 	}
 	return buf.Bytes(), nil
 }
-
-// fileStamp is a file as it was, which is all that is needed to tell whether it
-// has moved since.
-type fileStamp struct {
-	size int64
-	mod  time.Time
-}
-
-func stampOf(info os.FileInfo) fileStamp { return fileStamp{size: info.Size(), mod: info.ModTime()} }
-
-func (f fileStamp) same(other fileStamp) bool { return f.size == other.size && f.mod.Equal(other.mod) }
 
 // placement is what xdocc last put at an output path. Remembering it is what
 // lets a rebuild skip the output tree entirely: without it every run stats
