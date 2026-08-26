@@ -1,0 +1,8 @@
+# The build context is go.mod, go.sum, cmd/ and internal/ - nothing else is
+# copied in. old/ especially: it is the real site, video files and all, and
+# sending it to the daemon would cost more than the build.
+*
+!go.mod
+!go.sum
+!cmd
+!internal
