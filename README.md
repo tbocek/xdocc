@@ -640,8 +640,39 @@ quiet tree stays quiet in the log.
 ## 11. Running as a service
 
 Binaries for linux, macOS, FreeBSD and windows are attached to every
-[release](https://github.com/tbocek/xdocc/releases); `./release.sh vX.Y.Z` builds, tags
-and publishes one (`--dry-run` builds into `dist/` without touching GitHub).
+[release](https://github.com/tbocek/xdocc/releases), with an image at
+`ghcr.io/tbocek/xdocc` for linux/amd64 and linux/arm64.
+
+### In a container
+
+The image runs the watching mode as uid 1000, and nothing else: no shell in the
+entrypoint, no network, no root.
+
+```
+docker run -d --name xdocc \
+  -v ./site:/srv/site:ro \
+  -v ./www:/srv/www \
+  -v xdocc-cache:/var/cache/xdocc \
+  ghcr.io/tbocek/xdocc:latest
+```
+
+The source can be mounted read-only — xdocc never writes to it. The cache volume is
+what makes a restart cheap rather than a full rebuild, and the arguments are the
+default `CMD`, so override them only to change the paths:
+
+```
+docker run --rm -v ./site:/srv/site:ro -v ./www:/srv/www \
+  ghcr.io/tbocek/xdocc:latest -s /srv/site -o /srv/www          # build once and exit
+```
+
+One thing to know: the links xdocc writes for assets are **relative** to the output
+directory, so `/srv/www/photo.jpg` points at `../site/photo.jpg`. Inside the container
+that always resolves. On the host it resolves only if the two directories sit next to
+each other the same way — `./site` and `./www` above do. If the web server reads the
+output from somewhere else, put `symlink: false` in the root `.xdocc` and every asset is
+copied instead.
+
+### As a systemd unit
 
 `contrib/xdocc.service` is a systemd unit for the watching mode:
 
@@ -666,6 +697,45 @@ output directory as the only writable path). To publish after every build, add a
 `ExecStartPost=` of your own or let the output directory be what the web server
 serves.
 
+### Cutting a release
+
+Versions count up one at a time — v1, v2, v3 — so a release needs no decision about what
+to call it. `./release.sh` takes no arguments: it checks that the tree is clean, tags the
+next number and pushes it; that starts [the workflow](.github/workflows/build.yml), which
+runs the tests, builds the seven platforms, attaches them to the release with their
+checksums and the generated changelog, and pushes the image. The script then polls until
+that run has finished, so you learn at the terminal whether the release is good rather
+than by looking later.
+
+```
+./release.sh        # tag the next version, push, wait for the build
+```
+
+There is nothing to pass: the version is always one past the highest tag, so the only
+decision a release needs is whether to make one.
+
+Everything is built by the workflow and nothing locally, so `release.sh` needs only git,
+curl and jq. Setting `GITHUB_TOKEN` is worth it: polling costs up to 41 API calls against
+an unauthenticated limit of 60 per hour, so a second release within the hour would
+otherwise be refused.
+
+Go's module system will not accept a tag like `v3`, so every release is tagged twice: `v3`
+is the version, and `v1.3.0` is the same commit under a name Go recognises — the release
+number is the minor. The alias is pushed only after the build has succeeded, so a failed
+release leaves no version for `go install` to find, and the workflow skips any tag with a
+dot in it so the alias cannot cut a second release.
+
+The major stays at 1 and never moves, because this module has no importable API to break:
+everything is under `internal/`, which nothing outside the module may import, and
+`cmd/xdocc` is a `main` package. A major bump would announce a breaking change to a public
+surface that does not exist — and it would drag the module path with it, since from `v2`
+on Go puts the major version in the path itself.
+
+```
+go install github.com/tbocek/xdocc/cmd/xdocc@v1.3.0    # a particular release
+go install github.com/tbocek/xdocc/cmd/xdocc@latest    # the newest one
+```
+
 ---
 
 ## History
@@ -677,3 +747,9 @@ translated to Liquid templates next to the originals.
 
 The Go version drops what the Java version accumulated: wikitext, pandoc and external
 command handlers, the image pipeline, and about half of the properties.
+
+---
+
+## License
+
+MIT, see [LICENSE](LICENSE).

@@ -1,233 +1,68 @@
 #!/usr/bin/env bash
 #
-# Cut a release. The build itself happens on GitHub Actions, from the tag: this
-# checks the tree, tags it, pushes, and then waits for the workflow to finish so
-# you learn here whether the release is good rather than by looking later.
+# Cut a release. Versions count up one at a time - v1, v2, v3 - so a release
+# needs no decision about what to call it, and there is nothing to pass: this
+# tags the next number.
 #
-#   ./release.sh v0.1.0             tag, push, wait for the build
-#   ./release.sh v0.1.0 --dry-run   check and build everything locally, no tag
-#   ./release.sh v0.1.0 --package   build and package into dist/, nothing else
+# The build happens on GitHub Actions, from the tag. This tags, pushes, and then
+# waits for the workflow to finish, so you learn here whether the release is
+# good rather than by looking later.
 #
-# --package is what the workflow runs, so the platform list, the archives and
-# the release notes are written down once and are the same either way.
+# Each version is tagged twice: vN is the version, and v1.N.0 is the same commit
+# under a name Go's module system accepts. The major stays 1 and only the minor
+# counts up, because the module has no importable API to break - everything is
+# under internal/, and cmd/xdocc is a main package - so there is never a v2 to
+# declare, and the module path never has to carry one.
 #
-# Needs: go, git. Waiting also needs curl and jq.
+# Needs: git, curl, jq.
 
 set -euo pipefail
 
-readonly REPO_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-readonly DIST="${REPO_DIR}/dist"
-readonly BINARY="xdocc"
-readonly MAIN="./cmd/xdocc"
 readonly SLUG="tbocek/xdocc"
 readonly WORKFLOW="build.yml"
 readonly IMAGE="ghcr.io/tbocek/xdocc"
-
-# platform list: GOOS/GOARCH
-readonly PLATFORMS=(
-	linux/amd64
-	linux/arm64
-	linux/arm
-	darwin/amd64
-	darwin/arm64
-	freebsd/amd64
-	windows/amd64
-)
-# what the workflow attaches: one archive per platform, plus the checksums
-readonly EXPECTED=$((${#PLATFORMS[@]} + 1))
-
-# how long to wait for the workflow, in RETRIES cycles of SLEEP seconds
+readonly EXPECTED=8 # seven archives and the checksums file
 readonly RETRIES=40
 readonly SLEEP=15
 
 die() { printf '\033[31merror:\033[0m %s\n' "$*" >&2; exit 1; }
 step() { printf '\033[1m==>\033[0m %s\n' "$*"; }
-warn() { printf '\033[33mwarning:\033[0m %s\n' "$*" >&2; }
 
-VERSION=""
-MODE="release"
-for arg in "$@"; do
-	case "${arg}" in
-	--dry-run) MODE="dry-run" ;;
-	--package) MODE="package" ;;
-	-h | --help)
-		sed -n '2,/^$/p' "${BASH_SOURCE[0]}" | sed 's/^# \{0,1\}//'
-		exit 0
-		;;
-	-*) die "unknown argument '${arg}'" ;;
-	*)
-		[[ -z "${VERSION}" ]] || die "two versions given: '${VERSION}' and '${arg}'"
-		VERSION="${arg}"
-		;;
-	esac
+cd "$(dirname "${BASH_SOURCE[0]}")"
+
+[[ $# -eq 0 ]] || die "the next version comes from the tags, there is nothing to pass"
+for cmd in git curl jq; do
+	command -v "${cmd}" >/dev/null || die "${cmd} is not installed"
 done
-[[ -n "${VERSION}" ]] || die "usage: $0 vX.Y.Z [--dry-run|--package]"
-[[ "${VERSION}" =~ ^v[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.-]+)?$ ]] ||
-	die "version must look like v1.2.3 or v1.2.3-rc1, got '${VERSION}'"
-readonly VERSION MODE
+[[ -z "$(git status --porcelain)" ]] ||
+	die "the working tree is not clean, commit or stash first"
 
-cd "${REPO_DIR}"
+# ---------------------------------------------------------------- version
 
-# ---------------------------------------------------------------- build
+# the next version is one past the highest that exists anywhere
+git fetch --tags --quiet origin
 
-# package builds every platform into dist/, with checksums and release notes.
-# It touches nothing outside dist/ and needs no network, which is what lets the
-# workflow and a dry run share it.
-package() {
-	step "building ${VERSION}"
-	rm -rf "${DIST}"
-	mkdir -p "${DIST}"
-	# -s -w strip the debug info, -trimpath keeps build paths out of the binary
-	local ldflags="-s -w -X main.version=${VERSION}"
-	local platform goos goarch name exe work
-	for platform in "${PLATFORMS[@]}"; do
-		goos="${platform%/*}"
-		goarch="${platform#*/}"
-		name="${BINARY}_${VERSION}_${goos}_${goarch}"
-		exe="${BINARY}"
-		[[ "${goos}" == "windows" ]] && exe="${BINARY}.exe"
+# Highest by number, not by history: "git describe" answers with whatever tag
+# is nearest, which is the wrong one if a tag was ever made out of order.
+# "|| true" so that no tags at all is an empty answer and not a failure.
+PREVIOUS="$(git tag -l 'v[0-9]*' | grep -x 'v[0-9]\+' | sort -V | tail -1 || true)"
+PREVIOUS="${PREVIOUS:-v0}"
+# 10# so that a v08 is eight and not a bad octal number
+readonly VERSION="v$((10#${PREVIOUS#v} + 1))"
+# the release number is the minor version: v3 is v1.3.0, v10 is v1.10.0
+readonly SEMVER="v1.${VERSION#v}.0"
 
-		work="${DIST}/${name}"
-		mkdir -p "${work}"
-		printf '    %s\n' "${platform}"
-		CGO_ENABLED=0 GOOS="${goos}" GOARCH="${goarch}" \
-			go build -trimpath -ldflags "${ldflags}" -o "${work}/${exe}" "${MAIN}"
-		cp README.md "${work}/"
-		[[ -f LICENSE ]] && cp LICENSE "${work}/"
-		[[ -d contrib ]] && cp -r contrib "${work}/"
-
-		if [[ "${goos}" == "windows" ]]; then
-			command -v zip >/dev/null || die "zip is not installed, needed for the windows archive"
-			(cd "${DIST}" && zip -qr "${name}.zip" "${name}")
-		else
-			tar -czf "${DIST}/${name}.tar.gz" -C "${DIST}" "${name}"
-		fi
-		rm -rf "${work}"
-	done
-
-	step "checksums"
-	(cd "${DIST}" && sha256sum ./*.tar.gz ./*.zip >"${BINARY}_${VERSION}_checksums.txt")
-	cat "${DIST}/${BINARY}_${VERSION}_checksums.txt"
-
-	notes >"${DIST}/notes.md"
-}
-
-# notes writes the release notes: every commit since the previous tag, and how
-# to install what this release ships.
-notes() {
-	# in the workflow the tag exists and describes itself, so the previous one
-	# is asked for from the commit before it; locally the tag is not there yet
-	local previous
-	previous="$(git describe --tags --abbrev=0 "${VERSION}^" 2>/dev/null ||
-		git describe --tags --abbrev=0 2>/dev/null || true)"
-
-	if [[ -n "${previous}" && "${previous}" != "${VERSION}" ]]; then
-		echo "## Changes since ${previous}"
-		echo
-		git log --no-merges --pretty='- %s' "${previous}..${VERSION}" 2>/dev/null ||
-			git log --no-merges --pretty='- %s' "${previous}..HEAD"
-	else
-		echo "## ${VERSION}"
-		echo
-		echo "First release."
+for tag in "${VERSION}" "${SEMVER}"; do
+	if git rev-parse -q --verify "refs/tags/${tag}" >/dev/null; then
+		die "tag ${tag} already exists"
 	fi
-	cat <<-EOF
+done
 
-		## Install
+# ---------------------------------------------------------------- tag
 
-		\`\`\`
-		tar xzf ${BINARY}_${VERSION}_linux_amd64.tar.gz
-		sudo install -m 755 ${BINARY}_${VERSION}_linux_amd64/${BINARY} /usr/local/bin/${BINARY}
-		\`\`\`
-
-		Or with Go:
-
-		\`\`\`
-		go install github.com/${SLUG}/cmd/${BINARY}@${VERSION}
-		\`\`\`
-
-		Or as a container:
-
-		\`\`\`
-		docker run --rm -v ./site:/srv/site:ro -v ./www:/srv/www ${IMAGE}:${VERSION}
-		\`\`\`
-	EOF
-}
-
-if [[ "${MODE}" == "package" ]]; then
-	package
-	exit 0
-fi
-
-# ---------------------------------------------------------------- checks
-
-step "checking the working tree"
-command -v go >/dev/null || die "go is not installed"
-command -v git >/dev/null || die "git is not installed"
-
-# a dry run only builds, so a dirty tree is a warning there and a stop here
-complain() {
-	if [[ "${MODE}" == "dry-run" ]]; then warn "$*"; else die "$*"; fi
-}
-[[ -z "$(git status --porcelain)" ]] || complain "the working tree is dirty, commit or stash first"
-if [[ "${MODE}" == "release" ]]; then
-	command -v curl >/dev/null || die "curl is not installed, needed to wait for the build"
-	command -v jq >/dev/null || die "jq is not installed, needed to wait for the build"
-	git fetch --tags --quiet origin
-fi
-if git rev-parse -q --verify "refs/tags/${VERSION}" >/dev/null; then
-	complain "tag ${VERSION} already exists"
-fi
-BRANCH="$(git rev-parse --abbrev-ref HEAD)"
-if [[ "${BRANCH}" != "main" && "${MODE}" == "release" ]]; then
-	printf 'you are on branch %s, not main. continue? [y/N] ' "${BRANCH}"
-	read -r reply && [[ "${reply}" == [yY] ]] || die "aborted"
-fi
-if [[ "${MODE}" == "release" && -n "$(git log --oneline "origin/${BRANCH}..${BRANCH}" 2>/dev/null)" ]]; then
-	die "there are unpushed commits, push them first"
-fi
-
-step "gofmt"
-UNFORMATTED="$(gofmt -l . | grep -v '^old/' || true)"
-[[ -z "${UNFORMATTED}" ]] || die "not gofmt'ed:"$'\n'"${UNFORMATTED}"
-
-step "go vet"
-go vet ./...
-
-step "go test"
-go test ./...
-
-# The workflow builds the image too, and a Dockerfile that does not build would
-# only be found out after the tag is pushed. Building it here first costs a
-# minute and keeps a broken image from becoming a released one.
-if [[ -f Dockerfile ]] && command -v docker >/dev/null && docker buildx version >/dev/null 2>&1; then
-	step "docker image (both architectures, not pushed)"
-	docker buildx build --platform linux/amd64,linux/arm64 \
-		--build-arg "VERSION=${VERSION}" --output type=cacheonly . ||
-		die "the image does not build"
-elif [[ -f Dockerfile ]]; then
-	warn "docker buildx is not here, so the image is only checked by the workflow"
-fi
-
-if [[ "${MODE}" == "dry-run" ]]; then
-	package
-	step "dry run: not tagging, not pushing"
-	echo "artifacts are in ${DIST}"
-	exit 0
-fi
-
-# ---------------------------------------------------------------- publish
-
-echo
-step "about to release ${VERSION} from $(git remote get-url origin)"
-echo "    the tag is pushed, and the workflow builds ${#PLATFORMS[@]} platforms,"
-echo "    attaches them to the release and pushes ${IMAGE}:${VERSION}"
-printf 'continue? [y/N] '
-read -r reply && [[ "${reply}" == [yY] ]] || die "aborted, nothing was pushed"
-
-step "tagging"
-git tag -a "${VERSION}" -m "${BINARY} ${VERSION}"
-git push origin "${VERSION}"
+step "tagging ${VERSION}"
+git tag -a "${VERSION}" -m "xdocc ${VERSION}"
+git push --quiet origin "${VERSION}"
 
 # ---------------------------------------------------------------- wait
 
@@ -242,6 +77,8 @@ TAG_URL="https://github.com/${SLUG}/releases/tag/${VERSION}"
 
 # gh_get URL: sets GH_BODY from the response. Aborts the whole script on a rate
 # limit (403/429) or an unreachable API, rather than masking it as "not ready".
+# A GITHUB_TOKEN in the environment raises the limit from 60/hr to 5000/hr,
+# which matters because one release costs up to 41 calls of the 60.
 GH_BODY=""
 gh_get() {
 	local out code auth=()
@@ -251,11 +88,13 @@ gh_get() {
 	code="${out##*$'\n'}"
 	GH_BODY="${out%$'\n'*}"
 	if [[ "${code}" == "403" || "${code}" == "429" ]]; then
-		warn "the release may have been made anyway, see ${TAG_URL}"
+		printf '\033[33mwarning:\033[0m the release may have been made anyway, see %s\n' "${TAG_URL}" >&2
 		die "GitHub API rate limit reached (HTTP ${code}): over the 60 requests/hr unauthenticated limit"
 	fi
 }
 
+# Stage 1: wait for the run to finish. ${SEMVER} lands on this same commit, but
+# it is pushed further down, so this commit has exactly one run to look at.
 step "waiting for the build of ${SHA:0:8}"
 conclusion=""
 run_url=""
@@ -275,12 +114,20 @@ done
 [[ "${conclusion}" == "success" ]] ||
 	die "the build is still not finished after $((RETRIES * SLEEP))s (last status: ${conclusion:-unknown}), see ${TAG_URL}"
 
-# The build succeeded, so one call is enough to confirm what it attached.
+# Stage 2: the build succeeded, so one call confirms what it attached.
 gh_get "${REL_URL}"
 assets="$(jq '.assets | length' <<<"${GH_BODY}" 2>/dev/null || echo 0)"
 [[ "${assets}" -ge "${EXPECTED}" ]] ||
 	die "the build succeeded but ${VERSION} has only ${assets} of ${EXPECTED} assets, see ${TAG_URL}"
 
+# Only now: a build that failed leaves no version for Go to find, and the
+# workflow triggers on v*, so pushing this while the run was still being waited
+# on would have put a second run on the same commit.
+step "tagging ${SEMVER}, the name go install resolves"
+git tag -a "${SEMVER}" -m "xdocc ${VERSION}"
+git push --quiet origin "${SEMVER}"
+
 step "done: ${VERSION} is out with ${assets} assets"
 echo "    ${TAG_URL}"
 echo "    docker pull ${IMAGE}:${VERSION}"
+echo "    go install github.com/${SLUG}/cmd/xdocc@${SEMVER}"
