@@ -202,10 +202,35 @@ func (s *Site) reread(source string) (bool, error) {
 }
 
 // outputFlags are the settings that decide the shape of the output tree.
-type outputFlags struct{ symlink, minify, compress bool }
+type outputFlags struct{ symlink, minify, compress, markdown bool }
 
 func (s *Site) outputFlags() outputFlags {
-	return outputFlags{symlink: s.Symlink(), minify: s.Minify(), compress: s.Compress()}
+	return outputFlags{
+		symlink:  s.Symlink(),
+		minify:   s.Minify(),
+		compress: s.Compress(),
+		markdown: s.Markdown(),
+	}
+}
+
+// Markdown reports whether a .md copy of every generated page is written next
+// to it: "about.html" gets "about.md", a directory index gets "index.md".
+//
+// It is the half of the "Accept: text/markdown" convention a generator can do.
+// An agent that asks for markdown wants the prose without the navigation, the
+// styles and the layout wrappers, and a static site has no request to negotiate
+// against - so xdocc writes the markdown to a path the web server can find, and
+// the server picks between the two on the Accept header. See the README for the
+// nginx and Caddy side of it.
+//
+// On by default, like the other output settings; "markdown: false" in the root
+// .xdocc turns it off. Site-wide, read from the root .xdocc only.
+func (s *Site) Markdown() bool {
+	if s.Root == nil {
+		return true
+	}
+	v, ok := s.Root.Props.Bool(PropMarkdown)
+	return !ok || v
 }
 
 // Minify reports whether generated pages and the text files beside them are

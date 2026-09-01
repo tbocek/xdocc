@@ -21,7 +21,7 @@ set -euo pipefail
 readonly SLUG="tbocek/xdocc"
 readonly WORKFLOW="build.yml"
 readonly IMAGE="ghcr.io/tbocek/xdocc"
-readonly EXPECTED=8 # seven archives and the checksums file
+readonly EXPECTED=1 # the linux/amd64 binary
 readonly RETRIES=40
 readonly SLEEP=15
 

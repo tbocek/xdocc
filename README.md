@@ -275,6 +275,7 @@ everywhere — losing content to a misspelling is the worse way to be wrong.
 | `symlink` | bool | `true` | symlink assets into the output instead of copying them |
 | `minify` | bool | `true` | minify HTML, CSS, JS, SVG, JSON and XML on the way out |
 | `compress` | bool | `true` | write a `.gz` and a `.br` next to every text file in the output |
+| `markdown` | bool | `true` | write a `.md` copy of every page next to it, for clients asking for `Accept: text/markdown` |
 | `rescan` | duration | `10m` | how often the watcher rereads the whole tree even though nothing was reported; `off` disables it |
 | `workers` | count | processors + 1 | how many output files are minified, compressed and written at once |
 
@@ -305,6 +306,13 @@ If the source tree still holds `.gz` or `.br` files from an earlier build, next 
 file they belong to, xdocc ignores them: it writes those paths itself now, so the copies
 in the source are never read. Nothing is said about it — the build is neither wrong nor
 in doubt because of them — but they are dead weight and can be deleted.
+
+Every page is also written **as markdown** — `about.md` beside `about.html`, `index.md`
+beside a directory's `index.html` — so that one URL can serve a browser its HTML and an
+agent the prose without the frame around it. That is the generator's half of the
+`Accept: text/markdown` convention; the other half is three lines of web server config.
+What the copy contains, and how a server picks between the two,
+is [§12](#12-serving-markdown-to-agents). `markdown: false` turns it off.
 
 ### Legacy spellings
 
@@ -337,6 +345,9 @@ still compiles:
 
 A directory with an order prefix writes two things: a **listing** (`index.html`) and a
 **page for each item** in it. Everything below is one of those two being turned off.
+(Each of those pages also gets a `.md` copy of itself beside it — see
+[§12](#12-serving-markdown-to-agents) — but that is one page written twice, not a
+second page.)
 
 | | listing | pages |
 |---|---|---|
@@ -451,6 +462,7 @@ Available in every template (bound as `data`):
 | listing | `data.Items` `data.ItemsByURL` |
 | navigation | `data.GlobalNav` `data.CurrentNav` `data.Breadcrumb` |
 | paths | `data.Root` — the way back to the site root from the page being rendered, `""` or `"../../"` |
+| markdown | `data.Markdown` — the same content as markdown, `data.MarkdownURL` — the `.md` written next to this page, `""` when it has none |
 | flags | `data.IsDir` `data.IsIndex` `data.IsNav` `data.IsTransformed` `data.Show.Page` `data.Show.List` `data.Show.Link` |
 
 `data.URL` is the file an item produces, relative to the site root
@@ -554,8 +566,9 @@ in memory, so a rebuild reads only what moved:
 Everything is *rendered* again either way. Rendering from memory is cheap, and it is
 what keeps a page from going stale because of a file it does not contain; only the disk
 is narrowed. On the site under `old/site` — 2600 files, 91 GB, 3000 outputs — editing
-one markdown file is a 34 ms rebuild that reads that one file and writes six: the page,
-the listing above it, and a `.gz` and a `.br` for each.
+one markdown file is a rebuild of a few tens of milliseconds that reads that one file
+and writes twelve: the page, the listing above it, the markdown copy of each, and a
+`.gz` and a `.br` for all four.
 
 File system notifications are best effort: a network share, a container bind mount, or
 a burst that overran the kernel queue can swallow one, and then a page stays stale until
@@ -571,9 +584,10 @@ the output from outside and xdocc will not notice until it is restarted.
 ### What is cached
 
 Only what a handler produces from one file, and only because it cannot depend on
-anything else: the file's front matter and the HTML of its body. Handlers never look at
-templates, at `.xdocc`, or at other files, so nothing but the file itself can change
-that HTML.
+anything else: the file's front matter, the HTML of its body, and the markdown of it.
+Handlers never look at templates, at `.xdocc`, or at other files, so nothing but the
+file itself can change either rendition — and both come out of the same read, so the
+markdown copy costs no second trip to the disk.
 
 An entry is valid while the file is byte for byte the one that was rendered — the cache
 hashes the file rather than trusting its timestamp. A `git checkout`, an `rsync` or a
@@ -609,12 +623,14 @@ warning.
 Every run says what it did:
 
 ```
-xdocc: 2982 written, 0 unchanged (61 pages, 2921 assets), 235 read in 990ms   ← at startup
-xdocc: 6 written, 2976 unchanged (61 pages, 2921 assets), 1 read in 39ms      ← after an edit
+xdocc: 3163 written, 0 unchanged (61 pages, 3102 assets), 235 read in 1.22s   ← at startup
+xdocc: 12 written, 3151 unchanged (61 pages, 3102 assets), 1 read in 39ms    ← after an edit
 ```
 
-Pages and assets are what the site is made of, compressed copies counted as assets;
-written and unchanged are what this run had to touch. **Read** is the source files that
+Pages and assets are what the site is made of, compressed copies and markdown copies
+counted as assets — a page's `.md` is the same page, not a second one, so it is counted
+where its `.gz` and its `.br` are; written and
+unchanged are what this run had to touch. **Read** is the source files that
 came off the disk rather than out of a cache — the work neither cache could spare. It
 is worth knowing that it is never zero on a full walk: the hash that decides whether a
 file changed is a hash of the file's bytes, so the walk has to read every content file
@@ -628,7 +644,7 @@ once it is done, and says in one line what it is watching and how often it will 
 it:
 
 ```
-xdocc: 2982 written, 0 unchanged (61 pages, 2921 assets), 235 read in 1.01s
+xdocc: 3163 written, 0 unchanged (61 pages, 3102 assets), 235 read in 1.22s
 xdocc: watching /srv/site, rereading the whole tree every 10m0s
 ```
 
@@ -639,9 +655,11 @@ quiet tree stays quiet in the log.
 
 ## 11. Running as a service
 
-Binaries for linux, macOS, FreeBSD and windows are attached to every
+A linux/amd64 binary is attached to every
 [release](https://github.com/tbocek/xdocc/releases), with an image at
-`ghcr.io/tbocek/xdocc` for linux/amd64 and linux/arm64.
+`ghcr.io/tbocek/xdocc` for the same platform. Anywhere else, build it: xdocc uses no
+CGo, so `go build ./cmd/xdocc` cross-compiles to whatever Go targets with nothing but
+`GOOS` and `GOARCH` set.
 
 ### In a container
 
@@ -671,6 +689,64 @@ that always resolves. On the host it resolves only if the two directories sit ne
 each other the same way — `./site` and `./www` above do. If the web server reads the
 output from somewhere else, put `symlink: false` in the root `.xdocc` and every asset is
 copied instead.
+
+### With Portainer
+
+[`.portainer/docker-compose.yml`](.portainer/docker-compose.yml) is a Swarm stack for an
+ingress that routes by label, [caddy-docker-proxy](https://github.com/lucaslorentz/caddy-docker-proxy)
+in particular. Add it from this repository with that as the compose path — not through
+the web editor, which has no `./Caddyfile` next to it for the `configs:` entry to read.
+
+It is **two services**, because xdocc listens on nothing: `xdocc` generates into a
+volume, and `web` serves that volume and carries the label the site name resolves
+against. Change `xdocc.sifs0005.infs.ch` to the name you want; the port stays 8080,
+which is what [`.portainer/Caddyfile`](.portainer/Caddyfile) listens on.
+
+That Caddyfile is the content negotiation of [§12](#12-serving-markdown-to-agents), so
+the stack answers `Accept: text/markdown` out of the box and serves the `.br` and `.gz`
+xdocc already wrote. It reaches the container as a Swarm config rather than a mount,
+because a volume would start empty and a bind mount would have to exist on whatever node
+the task lands on. Swarm configs are immutable, so **editing the Caddyfile means bumping
+`xdocc-caddyfile-v1` in the stack** — a redeploy that changes the content under an
+unchanged name fails with `only updates to Labels are allowed`.
+
+`/dav` on that same port is **WebDAV onto the source**, so the site can be edited by
+mounting `https://xdocc.sifs0005.infs.ch/dav/` in a file manager: drop a file in, the
+watcher next door notices and regenerates. It is a path and not a second hostname
+because WebDAV answers PROPFIND with absolute paths, which means the prefix cannot
+simply be stripped — the Caddyfile matches `/dav/*` without stripping and passes
+`prefix /dav` to the module, and the site itself never sees those requests. That
+needs a Caddy with the module compiled in — plugins are Go packages linked into the
+binary — so [`.portainer/Dockerfile`](.portainer/Dockerfile) runs `xcaddy build --with
+github.com/mholt/caddy-webdav` and the release workflow pushes the result as
+`ghcr.io/tbocek/xdocc-caddy:latest`.
+
+The `basic_auth` block is in the Caddyfile, with the username in plain sight and only
+the hash coming from a **Swarm secret** — made in Portainer under *Secrets* before the
+stack is deployed, named `xdocc-webdav-env-v1`, and holding one line:
+
+```
+WEBDAV_HASH=$2a$14$Xk...the.rest.of.what.caddy.hash-password.printed
+```
+
+Caddy substitutes environment variables into a Caddyfile, not files, and a Swarm secret
+is a file — so the stack starts Caddy with `--envfile /run/secrets/webdav_env` and the
+Caddyfile writes `{$WEBDAV_HASH}`. The `$` in the hash needs no escaping there, which it
+would in a compose `environment:` value. Secrets are immutable like configs, so changing
+the password means a new secret under a new name and the same bump in the stack file,
+and the secret has to exist — Caddy will not start without the env file, which takes the
+site down with it.
+
+Basic auth sends the password in clear, so the ingress in front has to be the one
+terminating HTTPS. To do without WebDAV entirely, drop the two `/dav` handles and the
+`secrets:` entries, and go back to `caddy:2-alpine`.
+
+`site` is an ordinary volume and starts empty — fill it over WebDAV, or replace it with
+a bind mount to a source already on the host. Note that `web` mounts it too: the asset
+links are relative to `/srv/www`, so `/srv/site` has to be in the serving container at
+the same place. `symlink: false` in the root `.xdocc` makes the output standalone and lets
+that mount go. And since the volumes are local, both services have to run on the same
+node — one host, or a `placement` constraint on each.
 
 ### As a systemd unit
 
@@ -702,8 +778,8 @@ serves.
 Versions count up one at a time — v1, v2, v3 — so a release needs no decision about what
 to call it. `./release.sh` takes no arguments: it checks that the tree is clean, tags the
 next number and pushes it; that starts [the workflow](.github/workflows/build.yml), which
-runs the tests, builds the seven platforms, attaches them to the release with their
-checksums and the generated changelog, and pushes the image. The script then polls until
+runs the tests, builds the linux/amd64 binary, attaches it to the release with the
+generated changelog, and pushes the image. The script then polls until
 that run has finished, so you learn at the terminal whether the release is good rather
 than by looking later.
 
@@ -734,6 +810,159 @@ on Go puts the major version in the path itself.
 ```
 go install github.com/tbocek/xdocc/cmd/xdocc@v1.3.0    # a particular release
 go install github.com/tbocek/xdocc/cmd/xdocc@latest    # the newest one
+```
+
+---
+
+## 12. Serving markdown to agents
+
+Every page is written twice: `about.html`, and `about.md` next to it; a directory's
+`index.html`, and `index.md` next to that. The `.md` is the page without the frame —
+no header, no navigation, no styles, no layout wrappers — which is what a scraper, a
+crawler or an agent reading the site is after, at a fraction of the bytes. On
+[dsl.i.ost.ch](https://dsl.i.ost.ch/) the publication list is 29 KB of HTML against
+21 KB of markdown, and a news item 1008 bytes against 261.
+
+That is the generator's half of the [`Accept: text/markdown`](https://acceptmarkdown.com/)
+convention: one URL, two renditions, and the web server hands over whichever the
+request asked for. xdocc never opens a socket, so it cannot negotiate anything itself;
+what it can do is put the markdown where a server finds it knowing nothing about the
+tree — same path, `.md` instead of `.html`.
+
+Pages also point at their own copy, so a client that does not negotiate can still find
+it:
+
+```html
+<link rel="alternate" type="text/markdown" href="about.md">
+```
+
+The built-in `page.html` emits that. A site with a `page.html` of its own adds it by
+hand — `data.MarkdownURL` is empty when the page has no copy, so it can be tested:
+
+```liquid
+{% if data.MarkdownURL %}<link rel="alternate" type="text/markdown" href="{{ data.MarkdownURL }}">{% endif %}
+```
+
+### What the copy contains
+
+The copy follows the **items**, not the templates. Templates are HTML and there is
+nothing to run them over here, so the markdown of a page is the markdown of what is on
+it and none of what a template puts around it.
+
+| Item | In the copy |
+|---|---|
+| a markdown file | itself, front matter stripped — the source as it was written |
+| a `.bib` file | the same citations, as a markdown list |
+| an HTML file | itself, unchanged: markdown carries inline HTML, and turning HTML back into markdown would be guessing at what the author meant |
+| a `.link` file | the markdown of whatever it pulled in, the same as the page |
+| a listing | the markdown of its items, in the order the listing has them, blank line between |
+| anything not transformed — a subdirectory, a PDF, an asset | a markdown link, which is what a listing makes of it too |
+
+`${name}`, `${url}` and the other placeholders are substituted in the copy exactly as
+they are in the page, so both say the same thing.
+
+Two consequences worth knowing before pointing an agent at it:
+
+- **A listing loses what its list template added.** Year headings over a publication
+  list, a wrapper class, an item the template filters out by name — the copy has the
+  items themselves and nothing that only `list.html` knew about. Filtering by `show`
+  in the filename rather than in the template keeps the two in step.
+- **A page with nothing to say in markdown gets no copy**, rather than an empty one:
+  a directory that only links to files, an empty listing. The server then has a
+  missing file to fall back on and not a blank answer.
+
+If a file in the source tree already writes to that path — a passed-through `about.md`
+next to a generated `about.html` — the source wins and xdocc says so once in the log,
+rather than quietly replacing it. Copies are compressed like every other text output,
+so the `.gz` and the `.br` are there too, and they are counted as assets: a page's
+markdown is the same page, not a second one.
+
+`markdown: false` in the root `.xdocc` turns the whole thing off.
+
+### Caddy
+
+```caddyfile
+example.com {
+	root * /srv/site
+
+	# the answer depends on Accept whether or not this request asked for
+	# markdown, so every response says so
+	header Vary Accept
+
+	@markdown header Accept *text/markdown*
+	handle @markdown {
+		# "/a/b.html" has "/a/b.md", and a directory has the copy of its index
+		@page path_regexp page ^(.*)\.html$
+		rewrite @page {re.page.1}.md
+		@dir path */
+		rewrite @dir {path}index.md
+		# and back to what was asked for when the page has no copy
+		try_files {path} {http.request.orig_uri.path}
+	}
+
+	# serves the .gz and .br xdocc already wrote instead of compressing again
+	file_server {
+		precompressed br gzip
+	}
+}
+```
+
+Caddy knows the `.md` extension, so `Content-Type: text/markdown; charset=utf-8` comes
+out by itself, and `precompressed` picks up the `.br` of a copy the same as the `.br`
+of a page.
+
+### nginx
+
+nginx has no entry for `.md`, so add one line to `mime.types`:
+
+```nginx
+text/markdown  md;
+```
+
+It goes in that file rather than in a `types { … }` block of your own, because such a
+block *replaces* the table `include mime.types` brought in instead of adding to it.
+Then:
+
+```nginx
+# the copy next to a page: "/a/b.html" has "/a/b.md", "/a/" has "/a/index.md"
+map $uri $md_uri {
+    default                "/.no-markdown";
+    "~^(?<page>.*)\.html$" "$page.md";
+    "~^(?<dir>.*/)$"       "${dir}index.md";
+}
+
+# ...but only for a client that asked for it. Everything else keeps a name that
+# is never in the output tree, so the try_files below simply misses on it and
+# goes on to the page.
+map $http_accept $md_try {
+    default           "/.no-markdown";
+    "~*text/markdown" $md_uri;
+}
+
+server {
+    root /srv/site;
+    index index.html;
+
+    gzip_static on;                    # and ngx_brotli for the .br
+    add_header Vary Accept always;
+
+    location / {
+        try_files $md_try $uri $uri/ =404;
+    }
+}
+```
+
+`Vary: Accept` is not decoration in either: without it a cache in front of the site
+will hand an agent's markdown to the next browser that asks for the same URL.
+
+Either way, this is what it looks like from the outside:
+
+```
+$ curl -sI https://example.com/pub/ | grep -i content-type
+content-type: text/html; charset=utf-8
+
+$ curl -sI -H 'Accept: text/markdown' https://example.com/pub/ | grep -i content-type
+content-type: text/markdown; charset=utf-8
 ```
 
 ---

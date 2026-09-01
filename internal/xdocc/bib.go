@@ -78,6 +78,47 @@ func renderBib(body []byte) string {
 	return out.String()
 }
 
+// renderBibMarkdown turns a .bib file into the same citations as renderBib, as
+// a markdown list. It is a list and not a run of paragraphs because that is what
+// the file is: entries in the order it has them, each one a whole citation.
+// Nothing is escaped - a citation is authors, a title, a venue and a year, and
+// the characters markdown reads are not the ones those carry.
+func renderBibMarkdown(body []byte) string {
+	var out strings.Builder
+	for _, entry := range parseBib(body) {
+		out.WriteString("- ")
+		if authors := bibAuthors(entry.Fields["author"]); authors != "" {
+			out.WriteString(authors)
+			out.WriteString(", ")
+		}
+		if title := entry.field("title"); title != "" {
+			out.WriteString(`"`)
+			out.WriteString(title)
+			out.WriteString(`", `)
+		}
+		if venue := entry.venue(); venue != "" {
+			out.WriteString("**")
+			out.WriteString(venue)
+			out.WriteString("**; ")
+		}
+		if month := bibMonth(entry.field("month")); month != "" {
+			out.WriteString(month)
+			out.WriteString(", ")
+		}
+		// the year is often not a year at all but a patent number or a note
+		out.WriteString(entry.field("year"))
+		out.WriteString(".")
+		if url := entry.field("url"); url != "" {
+			// an autolink, so the url is its own text and needs no escaping
+			out.WriteString(" <")
+			out.WriteString(url)
+			out.WriteString(">")
+		}
+		out.WriteString("\n")
+	}
+	return out.String()
+}
+
 // bibMonth expands "aug" to "August" and leaves anything it does not know
 // alone, because bib files spell the month in every way there is.
 func bibMonth(value string) string {

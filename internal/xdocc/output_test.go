@@ -207,10 +207,10 @@ func TestResultCountsUnchanged(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	// the page, the listing that quotes it, and the two compressed copies of
-	// each - and nothing else
-	if second.Written != 6 {
-		t.Errorf("after one change: %s, want 6 written", second)
+	// the page, the listing that quotes it, the markdown copy of each, and the
+	// two compressed copies of all four - and nothing else
+	if second.Written != 12 {
+		t.Errorf("after one change: %s, want 12 written", second)
 	}
 }
 

@@ -10,16 +10,24 @@ import (
 
 // cacheVersion invalidates the whole cache when the way content is rendered
 // changes.
-const cacheVersion = 2
+const cacheVersion = 3
 
-// CacheEntry is what is remembered about one source file: its front matter and
-// the HTML its handler produced. Neither depends on templates or on .xdocc, so
-// only a change of the file itself invalidates it.
+// CacheEntry is what is remembered about one source file: its front matter, the
+// HTML its handler produced, and the markdown that goes into the page's .md
+// copy. None of the three depends on templates or on .xdocc, so only a change of
+// the file itself invalidates them.
 type CacheEntry struct {
 	Hash    [32]byte // of the file as it is on disk, front matter included
 	Front   Props
 	Content string
 	HasBody bool
+
+	// Markdown is the item as markdown. For a markdown file that is the source
+	// itself, which the cache would otherwise not hold: the walk reads the file
+	// to hash it but keeps only what it rendered, so without this a rebuild
+	// would go back to the disk for every page it is about to write.
+	Markdown    string
+	HasMarkdown bool
 }
 
 // Cache remembers rendered content between runs, so that a change to one file
@@ -141,6 +149,27 @@ func (s *Site) cached(item *Item, convert func([]byte) (template.HTML, error)) (
 		item.cache.HasBody = true
 	}
 	return content, nil
+}
+
+// cachedMarkdown is cached for the markdown side: it runs convert on the body
+// of an item and remembers the result. It is separate from cached because the
+// two renditions of a file are wanted at the same time but cached apart - a
+// site with "markdown: false" never fills this in, and an entry written by an
+// older version has only the HTML.
+func (s *Site) cachedMarkdown(item *Item, convert func([]byte) string) (string, error) {
+	if item.cache != nil && item.cache.HasMarkdown {
+		return item.cache.Markdown, nil
+	}
+	body, err := s.body(item)
+	if err != nil {
+		return "", err
+	}
+	out := convert(body)
+	if item.cache != nil {
+		item.cache.Markdown = out
+		item.cache.HasMarkdown = true
+	}
+	return out, nil
 }
 
 // body returns the content of a file without its front matter, reading it if

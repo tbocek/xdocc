@@ -19,6 +19,7 @@ const (
 	// site settings, root .xdocc only
 	PropSymlink  = "symlink"
 	PropMinify   = "minify"
+	PropMarkdown = "markdown"
 	PropCompress = "compress"
 	PropRescan   = "rescan"
 	PropWorkers  = "workers"

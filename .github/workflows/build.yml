@@ -6,114 +6,41 @@ permissions:
 
 on:
   push:
-    tags:
-      # v1, v2, v3 - and the vN.0.0 alias next to each of them, which exists
-      # only so that Go's module system has a version it accepts. The alias
-      # carries no release of its own; both jobs below skip it.
-      - 'v*'
-
-env:
-  GO_VERSION: '1.26'
+    tags: ['v*']
 
 jobs:
-  # One job builds every platform. Go cross-compiles without CGo, so a matrix
-  # would buy nothing, and the checksums file has to be written where all the
-  # archives are anyway. It also means one job creates the release, so there is
-  # no race over who creates it first.
   release:
     runs-on: ubuntu-latest
     if: ${{ !contains(github.ref_name, '.') }}
     steps:
-      - uses: actions/checkout@v6
-
-      - uses: actions/setup-go@v6
+      - uses: actions/checkout@v7
+      - uses: actions/setup-go@v7
         with:
-          go-version: ${{ env.GO_VERSION }}
+          go-version-file: go.mod
+      - run: go vet ./... && go test ./...
+      - run: |
+          CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -trimpath \
+            -ldflags "-s -w -X main.version=$GITHUB_REF_NAME" \
+            -o dist/xdocc-linux-amd64 ./cmd/xdocc
+      - uses: softprops/action-gh-release@v3
+        with:
+          files: dist/xdocc-*
+          generate_release_notes: true
 
-      - name: Test
-        run: go vet ./... && go test ./...
-
-      - name: Build
-        env:
-          VERSION: ${{ github.ref_name }}
-        run: |
-          mkdir -p dist
-          for platform in linux/amd64 linux/arm64 linux/arm \
-                          darwin/amd64 darwin/arm64 freebsd/amd64 windows/amd64; do
-            goos="${platform%/*}"
-            goarch="${platform#*/}"
-            name="xdocc_${VERSION}_${goos}_${goarch}"
-            exe=xdocc
-            [ "$goos" = windows ] && exe=xdocc.exe
-            mkdir -p "dist/$name"
-            # -s -w strip the debug info, -trimpath keeps build paths out of
-            # the binary, -X stamps the version an unstamped build calls "dev"
-            CGO_ENABLED=0 GOOS="$goos" GOARCH="$goarch" go build -trimpath \
-              -ldflags "-s -w -X main.version=$VERSION" \
-              -o "dist/$name/$exe" ./cmd/xdocc
-            cp README.md LICENSE "dist/$name/"
-            cp -r contrib "dist/$name/"
-            if [ "$goos" = windows ]; then
-              (cd dist && zip -qr "$name.zip" "$name")
-            else
-              tar -czf "dist/$name.tar.gz" -C dist "$name"
-            fi
-            rm -rf "dist/$name"
-          done
-          (cd dist && sha256sum ./*.tar.gz ./*.zip > "xdocc_${VERSION}_checksums.txt")
-          ls -l dist
-
-      - name: Publish
-        env:
-          GH_TOKEN: ${{ github.token }}
-          VERSION: ${{ github.ref_name }}
-        run: |
-          # The Go alias keeps the major at 1 and counts up the minor, since
-          # the module has no importable API to break: v3 is v1.3.0.
-          semver="v1.${VERSION#v}.0"
-
-          # GitHub writes the changelog itself, from the previous release -
-          # which is always the previous vN, since the alias makes none.
-          gh api -X POST "repos/${GITHUB_REPOSITORY}/releases/generate-notes" \
-            -f tag_name="$VERSION" -q .body > notes.md
-          {
-            printf '\n## Install\n\n```\n'
-            printf 'tar xzf xdocc_%s_linux_amd64.tar.gz\n' "$VERSION"
-            printf 'sudo install -m 755 xdocc_%s_linux_amd64/xdocc /usr/local/bin/xdocc\n' "$VERSION"
-            printf '```\n\nOr as a container:\n\n```\n'
-            printf 'docker run --rm -v ./site:/srv/site:ro -v ./www:/srv/www ghcr.io/%s:%s\n' \
-              "$GITHUB_REPOSITORY" "$VERSION"
-            printf '```\n\nOr with Go:\n\n```\n'
-            printf 'go install github.com/%s/cmd/xdocc@%s\n' "$GITHUB_REPOSITORY" "$semver"
-            printf '```\n'
-          } >> notes.md
-
-          # Creating only when it is not already there, and uploading with
-          # --clobber, so that re-running a failed run finishes the release
-          # rather than falling over on the half of it that did work.
-          gh release view "$VERSION" >/dev/null 2>&1 ||
-            gh release create "$VERSION" --title "xdocc $VERSION" --notes-file notes.md
-          gh release upload "$VERSION" \
-            dist/*.tar.gz dist/*.zip dist/*_checksums.txt --clobber
-
-  # The image is independent of the archives, so it builds alongside them.
   image:
     runs-on: ubuntu-latest
     if: ${{ !contains(github.ref_name, '.') }}
     steps:
-      - uses: actions/checkout@v6
-
-      - uses: docker/setup-buildx-action@v3
-
-      - uses: docker/login-action@v3
+      - uses: actions/checkout@v7
+      - uses: docker/setup-buildx-action@v4
+      - uses: docker/login-action@v4
         with:
           registry: ghcr.io
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
-
-      - uses: docker/build-push-action@v6
+      - uses: docker/build-push-action@v7
         with:
-          platforms: linux/amd64,linux/arm64
+          platforms: linux/amd64
           push: true
           build-args: VERSION=${{ github.ref_name }}
           # every release is the newest one - the versions only count up - so
@@ -121,5 +48,27 @@ jobs:
           tags: |
             ghcr.io/${{ github.repository }}:${{ github.ref_name }}
             ghcr.io/${{ github.repository }}:latest
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+  # Caddy with the WebDAV module linked in, for the Portainer stack. It has
+  # nothing to do with the xdocc version and only rides along on the tag.
+  caddy:
+    runs-on: ubuntu-latest
+    if: ${{ !contains(github.ref_name, '.') }}
+    steps:
+      - uses: actions/checkout@v7
+      - uses: docker/setup-buildx-action@v4
+      - uses: docker/login-action@v4
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - uses: docker/build-push-action@v7
+        with:
+          context: .portainer
+          platforms: linux/amd64
+          push: true
+          tags: ghcr.io/${{ github.repository }}-caddy:latest
           cache-from: type=gha
           cache-to: type=gha,mode=max

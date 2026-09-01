@@ -28,6 +28,14 @@ type Data struct {
 	Root    string // relative path from the page being rendered to the site root
 	Content string // the item, or the listing, as HTML
 
+	// Markdown is the same thing as markdown, for the .md copy written next to
+	// the page. It is empty when the site has "markdown: false".
+	Markdown string
+	// MarkdownURL is that copy, as a link from the page to it - "about.md" next
+	// to "about.html". It is empty when the page has no copy, so a template can
+	// test it before pointing at it.
+	MarkdownURL string
+
 	Items      []*Data          // the items of a listing
 	ItemsByURL map[string]*Data // the same items, keyed by output file name
 
@@ -318,14 +326,50 @@ func (c *compiler) listing(dir *Item, items []*Data) (*Data, error) {
 		return nil, err
 	}
 	data.Content = content
+	// The markdown copy follows the items, not the list template: a template is
+	// HTML and there is nothing to run it over here. A listing that leaves an
+	// item out - the intro a directory shows only on its own front page, say -
+	// leaves it out of the page but not out of the copy.
+	var md strings.Builder
+	for _, item := range items {
+		appendMarkdown(&md, item.Markdown)
+	}
+	data.Markdown = md.String()
 	return data, nil
 }
+
+// appendMarkdown adds one item to a page's markdown, keeping the blank line
+// between two blocks that is what keeps them two blocks.
+func appendMarkdown(out *strings.Builder, md string) {
+	if md = strings.TrimSpace(md); md == "" {
+		return
+	}
+	if out.Len() > 0 {
+		out.WriteString("\n\n")
+	}
+	out.WriteString(md)
+}
+
+// markdownLink is what the markdown copy says about an item xdocc does not
+// transform - a directory, a file it only passes through. Those are a link in
+// the listing rather than content of it, which is what file.html makes of them
+// and what this makes of them.
+func markdownLink(item *Item, root string) string {
+	name := item.Name
+	if name == "" {
+		name = item.FileName
+	}
+	return "[" + markdownText.Replace(name) + "](" + root + item.Link() + ")"
+}
+
+// markdownText escapes the brackets that would end a link text early.
+var markdownText = strings.NewReplacer("[", `\[`, "]", `\]`)
 
 // render turns one item into the HTML that goes into a page. page is the item
 // whose page it is rendered for, which decides the relative paths.
 func (c *compiler) render(item, page *Item, depth int) (*Data, error) {
 	data := c.newData(item, page)
-	raw, err := c.content(item, page, depth)
+	raw, rawMarkdown, err := c.content(item, page, depth)
 	if err != nil {
 		return nil, err
 	}
@@ -335,42 +379,64 @@ func (c *compiler) render(item, page *Item, depth int) (*Data, error) {
 		return nil, err
 	}
 	data.Content = rendered
+	if c.site.Markdown() {
+		if !item.IsTransformed() {
+			rawMarkdown = markdownLink(item, data.Root)
+		}
+		// the same substitution the HTML gets, so ${name} and ${url} say the
+		// same thing in both copies
+		data.Markdown = strings.TrimSpace(substitute(rawMarkdown, item, data.Root))
+	}
 	return data, nil
 }
 
-// content runs the handler of an item and returns its HTML.
-func (c *compiler) content(item, page *Item, depth int) (template.HTML, error) {
+// content runs the handler of an item and returns the two renditions of it: the
+// HTML that goes into the page, and the markdown that goes into the page's .md
+// copy. Both come out of the same read of the file and are cached side by side,
+// so the second one costs no second trip to the disk.
+func (c *compiler) content(item, page *Item, depth int) (template.HTML, string, error) {
 	if item.IsDir {
-		return "", nil
+		return "", "", nil
 	}
+	var toHTML func([]byte) (template.HTML, error)
+	var toMarkdown func([]byte) string
 	switch item.Handler() {
 	case HandlerMarkdown:
-		return c.site.cached(item, func(body []byte) (template.HTML, error) {
-			return renderMarkdown(body)
-		})
+		toHTML = renderMarkdown
+		// the file is the markdown, so the copy of a page written in markdown
+		// is the source that was written
+		toMarkdown = func(body []byte) string { return string(body) }
 	case HandlerHTML:
-		return c.site.cached(item, func(body []byte) (template.HTML, error) {
-			return renderHTML(body), nil
-		})
+		toHTML = func(body []byte) (template.HTML, error) { return renderHTML(body), nil }
+		// There is no markdown behind an .html file and turning HTML back into
+		// markdown would be a guess at what the author meant. It goes in as it
+		// is: markdown carries inline HTML, so the copy is still markdown, and
+		// it still says what the page says.
+		toMarkdown = func(body []byte) string { return string(renderHTML(body)) }
 	case HandlerBib:
-		return c.site.cached(item, func(body []byte) (template.HTML, error) {
-			return template.HTML(renderBib(body)), nil
-		})
+		toHTML = func(body []byte) (template.HTML, error) { return template.HTML(renderBib(body)), nil }
+		toMarkdown = renderBibMarkdown
 	case HandlerLink:
 		return c.link(item, page, depth)
 	default:
-		return "", nil
+		return "", "", nil
 	}
+	html, err := c.site.cached(item, toHTML)
+	if err != nil || !c.site.Markdown() {
+		return html, "", err
+	}
+	md, err := c.site.cachedMarkdown(item, toMarkdown)
+	return html, md, err
 }
 
 // link resolves a .link file and renders what it pulls in.
-func (c *compiler) link(item, page *Item, depth int) (template.HTML, error) {
+func (c *compiler) link(item, page *Item, depth int) (template.HTML, string, error) {
 	if depth >= maxLinkDepth {
-		return "", fmt.Errorf("%s: link nested too deeply", item.Rel)
+		return "", "", fmt.Errorf("%s: link nested too deeply", item.Rel)
 	}
 	body, err := c.site.body(item)
 	if err != nil {
-		return "", err
+		return "", "", err
 	}
 	spec := parseLink(body)
 	var pulled []*Item
@@ -385,7 +451,7 @@ func (c *compiler) link(item, page *Item, depth int) (template.HTML, error) {
 	if spec.limit > 0 && len(pulled) > spec.limit {
 		pulled = pulled[:spec.limit]
 	}
-	var out strings.Builder
+	var out, outMarkdown strings.Builder
 	for _, target := range pulled {
 		// a .link file pulls in what says it is shown by a link
 		if !target.Show().Link {
@@ -400,25 +466,27 @@ func (c *compiler) link(item, page *Item, depth int) (template.HTML, error) {
 				}
 				data, err := c.render(child, page, depth+1)
 				if err != nil {
-					return "", err
+					return "", "", err
 				}
 				items = append(items, data)
 			}
 			sortData(items, target.Sort())
 			listing, err := c.listing(target, items)
 			if err != nil {
-				return "", err
+				return "", "", err
 			}
 			out.WriteString(string(listing.Content))
+			appendMarkdown(&outMarkdown, listing.Markdown)
 			continue
 		}
 		data, err := c.render(target, page, depth+1)
 		if err != nil {
-			return "", err
+			return "", "", err
 		}
 		out.WriteString(string(data.Content))
+		appendMarkdown(&outMarkdown, data.Markdown)
 	}
-	return template.HTML(out.String()), nil
+	return template.HTML(out.String()), outMarkdown.String(), nil
 }
 
 // newData builds the template data for an item rendered on a page.
@@ -434,12 +502,19 @@ func (c *compiler) newData(item, page *Item) *Data {
 	return data
 }
 
-// writePage wraps content in the page template and writes it to the output.
+// writePage wraps content in the page template and writes it to the output,
+// with the markdown copy of the page beside it.
 func (c *compiler) writePage(item *Item, data *Data) error {
 	page := c.newData(item, item)
 	page.Content = data.Content
+	page.Markdown = data.Markdown
 	page.Items = data.Items
 	page.ItemsByURL = data.ItemsByURL
+	// the copy is a file next to the page, so the page points at it by name
+	twin := c.markdownURL(item)
+	if twin != "" {
+		page.MarkdownURL = path.Base(twin)
+	}
 	html, err := c.site.templates.Render(TemplatePage, page)
 	if err != nil {
 		return err
@@ -454,7 +529,47 @@ func (c *compiler) writePage(item *Item, data *Data) error {
 		}
 		return c.place(item.URL, nil, func() ([]byte, error) { return out, nil })
 	})
+	if twin == "" {
+		return nil
+	}
+	// A page with nothing to say in markdown - a directory of files, an empty
+	// listing - gets no copy rather than an empty one, so that a server has a
+	// missing file to fall back on and not a blank answer.
+	markdown := strings.TrimSpace(page.Markdown)
+	if markdown == "" {
+		return nil
+	}
+	md := []byte(markdown + "\n")
+	c.claim(twin)
+	c.pool.do(func() error {
+		return c.placeAs(twin, nil, false, func() ([]byte, error) { return md, nil })
+	})
 	return nil
+}
+
+// markdownURL is where the markdown copy of a page goes, or "" when it has
+// none: the site turned them off, or a file in the source tree is already
+// written to that path and a copy of the page would silently replace it.
+func (c *compiler) markdownURL(item *Item) string {
+	if !c.site.Markdown() {
+		return ""
+	}
+	rel := strings.TrimSuffix(item.URL, path.Ext(item.URL)) + ".md"
+	dir := item
+	if !dir.IsDir {
+		dir = dir.Parent
+	}
+	if dir == nil {
+		return rel
+	}
+	for _, child := range dir.Children {
+		if !child.IsDir && child.URL == rel {
+			log.Printf("xdocc: %s is a file of its own, so %s gets no markdown copy",
+				child.Rel, item.URL)
+			return ""
+		}
+	}
+	return rel
 }
 
 // placeholder matches ${name} and the percent-encoded spelling a markdown link
@@ -496,9 +611,16 @@ func substitute(text string, item *Item, root string) string {
 // content is a function because on the quiet path it is never called: nothing
 // is read, nothing is minified, nothing is compressed.
 func (c *compiler) place(rel string, src *Item, content func() ([]byte, error)) error {
+	return c.placeAs(rel, src, src == nil, content)
+}
+
+// placeAs is place with the tally spelled out. The markdown copy of a page is
+// not a second page - the site has as many pages as it had - so it is counted
+// with the files placed beside them, the same as a page's .gz and .br are.
+func (c *compiler) placeAs(rel string, src *Item, isPage bool, content func() ([]byte, error)) error {
 	target := filepath.Join(c.site.Gen, filepath.FromSlash(rel))
 	c.produce(target)
-	if src == nil {
+	if isPage {
 		c.counts.pages.Add(1)
 	} else {
 		c.counts.assets.Add(1)

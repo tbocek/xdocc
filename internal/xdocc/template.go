@@ -44,6 +44,7 @@ var defaultTemplates = map[string]string{
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>{% if data.Name %}{{ data.Name }}{% else %}{{ data.URL }}{% endif %}</title>
+{% if data.MarkdownURL %}<link rel="alternate" type="text/markdown" href="{{ data.MarkdownURL }}">{% endif %}
 </head>
 <body>
 {% if data.GlobalNav %}<nav>{{ data.NavHTML }}</nav>{% endif %}
