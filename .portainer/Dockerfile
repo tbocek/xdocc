@@ -1,5 +1,7 @@
 FROM caddy:2-builder AS build
-RUN xcaddy build --with github.com/mholt/caddy-webdav
+# caddy-ocdav honours X-OC-Mtime, so an rclone sync of the site keeps the source
+# files' times and xdocc does not see every upload as a change
+RUN xcaddy build --with github.com/tbocek/caddy-ocdav@v0.1.0
 
 FROM caddy:2-alpine
 COPY --from=build /usr/bin/caddy /usr/bin/caddy
