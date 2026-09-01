@@ -38,15 +38,15 @@ func TestWorkersSetting(t *testing.T) {
 // would mean a build could not be reproduced.
 func TestWorkersDoNotChangeTheOutput(t *testing.T) {
 	files := map[string]string{
-		".templates/page.html":     `{{ data.Content }}`,
-		".templates/list.html":     listTemplate,
-		".templates/markdown.html": `[{{ data.URL }}]`,
-		"1-a.md":                   "a",
-		"2-b.md":                   "b",
-		"3-dir/1-c.md":             "c",
-		"3-dir/2-d.md":             "d",
-		"3-dir/style.css":          "body { color : red }",
-		"4-e.html":                 "<p>  e  </p>",
+		".templates/page.html": `{{ data.Content }}`,
+		".templates/list.html": listTemplate,
+		".templates/item.html": `[{{ data.URL }}]`,
+		"1-a.md":               "a",
+		"2-b.md":               "b",
+		"3-dir/1-c.md":         "c",
+		"3-dir/2-d.md":         "d",
+		"3-dir/style.css":      "body { color : red }",
+		"4-e.html":             "<p>  e  </p>",
 	}
 
 	tree := func(workers string) map[string]string {

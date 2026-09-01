@@ -235,6 +235,13 @@ func (s *Site) Compile() (Result, error) {
 // compileDir generates everything a directory is responsible for: its items,
 // its assets and its index.
 func (c *compiler) compileDir(dir *Item) error {
+	// A source directory - one nothing on the site can reach - is read where a
+	// .link pulls it in and written nowhere. Falling out here claims none of
+	// its output, so anything an earlier build left behind is cleaned up.
+	if !dir.publishes() {
+		return nil
+	}
+
 	var items []*Data
 	var index *Data
 
@@ -302,6 +309,19 @@ func (c *compiler) compileDir(dir *Item) error {
 	return c.writePage(dir, listing)
 }
 
+// variant is the layout-specific spelling of a template when the site has one:
+// "item.html" under layout "compact" is "item-compact.html". Without a layout, or
+// without that file in .templates, the template itself is used.
+func (c *compiler) variant(name, layout string) string {
+	if layout == "" {
+		return name
+	}
+	if alt := strings.TrimSuffix(name, ".html") + "-" + layout + ".html"; c.site.templates.Has(alt) {
+		return alt
+	}
+	return name
+}
+
 // listing renders the index of a directory.
 func (c *compiler) listing(dir *Item, items []*Data) (*Data, error) {
 	data := c.newData(dir, dir)
@@ -315,12 +335,7 @@ func (c *compiler) listing(dir *Item, items []*Data) (*Data, error) {
 	// "layout: root" renders list-root.html. Only self-set values are read,
 	// because layout is inherited and a root .xdocc would otherwise make every
 	// section's listing use the root's list template.
-	name := TemplateList
-	if v := dir.self[PropLayout]; v != "" {
-		if alt := "list-" + v + ".html"; c.site.templates.Has(alt) {
-			name = alt
-		}
-	}
+	name := c.variant(TemplateList, dir.self.setting(PropLayout, PropLayoutHere))
 	content, err := c.site.templates.Render(name, data)
 	if err != nil {
 		return nil, err
@@ -374,7 +389,22 @@ func (c *compiler) render(item, page *Item, depth int) (*Data, error) {
 		return nil, err
 	}
 	data.Content = substitute(string(raw), item, data.Root)
-	rendered, err := c.site.templates.Render(handlerTemplate[item.Handler()], data)
+	// every item that has content goes through the same template, and the
+	// layout picks the variant of it: a directory of citations under
+	// "layout=compact" renders each of them with item-compact.html. Here the
+	// inherited layout counts, because a section styles what is in it. What a
+	// listing links to rather than shows has no content and is a link instead:
+	// file.html for an asset, dir.html for a subdirectory, because what a
+	// listing says about a section is rarely what it says about a download.
+	name := TemplateItem
+	switch {
+	case item.IsDir:
+		name = TemplateDirectory
+	case item.Handler() == HandlerAsset:
+		name = TemplateFile
+	}
+	name = c.variant(name, item.Layout())
+	rendered, err := c.site.templates.Render(name, data)
 	if err != nil {
 		return nil, err
 	}
@@ -445,7 +475,7 @@ func (c *compiler) link(item, page *Item, depth int) (template.HTML, string, err
 	}
 	// The order the patterns were written in is kept; an explicit sort on the
 	// .link file re-sorts everything it pulled in.
-	if item.Props.Has(PropSort) {
+	if item.Props.hasSetting(PropSort, PropSortHere) {
 		sortItems(pulled, item.Sort())
 	}
 	if spec.limit > 0 && len(pulled) > spec.limit {
@@ -515,7 +545,9 @@ func (c *compiler) writePage(item *Item, data *Data) error {
 	if twin != "" {
 		page.MarkdownURL = path.Base(twin)
 	}
-	html, err := c.site.templates.Render(TemplatePage, page)
+	// the page frame takes a variant too, so a section can have its own
+	name := c.variant(TemplatePage, item.Layout())
+	html, err := c.site.templates.Render(name, page)
 	if err != nil {
 		return err
 	}

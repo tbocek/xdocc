@@ -26,6 +26,14 @@ func newBuild(t *testing.T, files map[string]string) *build {
 	for name, content := range files {
 		b.file(name, content)
 	}
+	// A site provides its own templates, so a fixture is not a site until it
+	// has them. These are the plainest ones that still render: a test writes
+	// its own where the template is what it is about.
+	for name, content := range fixtureTemplates {
+		if _, ok := files[TemplateDir+"/"+name]; !ok {
+			b.file(TemplateDir+"/"+name, content)
+		}
+	}
 	// These tests are about what xdocc generates, not about how small it can
 	// make it: minified markup and a .gz beside every page would only obscure
 	// the assertions. A test that is about them says so in its own .xdocc.
@@ -35,6 +43,31 @@ func newBuild(t *testing.T, files map[string]string) *build {
 	b.xdocc(plainSite + files[XdoccFile])
 	b.cache = OpenCache("")
 	return b
+}
+
+// fixtureTemplates are the stand-ins newBuild writes for whatever templates a
+// test did not bring its own of.
+var fixtureTemplates = map[string]string{
+	TemplatePage: `<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>{% if data.Name %}{{ data.Name }}{% else %}{{ data.URL }}{% endif %}</title>
+{% if data.MarkdownURL %}<link rel="alternate" type="text/markdown" href="{{ data.MarkdownURL }}">{% endif %}
+</head>
+<body>
+{% if data.GlobalNav %}<nav>{{ data.NavHTML }}</nav>{% endif %}
+<main>
+{{ data.Content }}
+</main>
+</body>
+</html>
+`,
+	TemplateList:      `{% for it in data.Items %}{{ it.Content }}{% endfor %}`,
+	TemplateItem:      `{{ data.Content }}`,
+	TemplateFile:      `<a href="{{ data.Root }}{{ data.Link }}">{% if data.Name %}{{ data.Name }}{% else %}{{ data.FileName }}{% endif %}</a>`,
+	TemplateDirectory: `<a href="{{ data.Root }}{{ data.Link }}">{% if data.Name %}{{ data.Name }}{% else %}{{ data.FileName }}{% endif %}</a>`,
 }
 
 // plainSite is the root .xdocc of a fixture that is about content only.
@@ -102,12 +135,12 @@ const listTemplate = `{% for x in data.Items %}[{{ x.URL }}]{% endfor %}`
 
 func TestCompileBasics(t *testing.T) {
 	b := newBuild(t, map[string]string{
-		".templates/page.html":     `{{ data.Content }}`,
-		".templates/list.html":     listTemplate,
-		".templates/markdown.html": `({{ data.Content }})`,
-		"1-intro.md":               "hello **world**",
-		"2-about[About us].md":     "about",
-		"logo.svg":                 "<svg/>",
+		".templates/page.html": `{{ data.Content }}`,
+		".templates/list.html": listTemplate,
+		".templates/item.html": `({{ data.Content }})`,
+		"1-intro.md":           "hello **world**",
+		"2-about[About us].md": "about",
+		"logo.svg":             "<svg/>",
 	})
 	b.compile()
 
@@ -176,11 +209,11 @@ func TestCompileAssetsAndVisible(t *testing.T) {
 
 func TestCompileIndexItem(t *testing.T) {
 	b := newBuild(t, map[string]string{
-		".templates/page.html":     `[{% if data.Content %}{{ data.Content }}{% endif %}]`,
-		".templates/list.html":     listTemplate,
-		".templates/markdown.html": `{{ data.Content }}`,
-		"1-index.md":               "the page itself",
-		"2-other.md":               "other",
+		".templates/page.html": `[{% if data.Content %}{{ data.Content }}{% endif %}]`,
+		".templates/list.html": listTemplate,
+		".templates/item.html": `{{ data.Content }}`,
+		"1-index.md":           "the page itself",
+		"2-other.md":           "other",
 	})
 	b.compile()
 	// the index item replaces the generated listing
@@ -205,9 +238,9 @@ func TestCompileShowPlaces(t *testing.T) {
 	b := newBuild(t, map[string]string{
 		".templates/page.html":         `{{ data.Content }}`,
 		".templates/list.html":         listTemplate,
-		".templates/markdown.html":     `[{{ data.URL }}]`,
-		".templates/link.html":         `({{ data.Content }})`,
-		"1-pull.link":                  "url=a/*\n",
+		".templates/item.html":         `[{{ data.URL }}]`,
+		".templates/item-pull.html":    `({{ data.Content }})`,
+		"1-pull|layout=pull.link":      "url=a/*\n",
 		"1-a[A]/0-x|show=page.md":      "hidden from both",
 		"1-a[A]/1-o|show=page-link.md": "links only",
 		"1-a[A]/2-y.md":                "visible",
@@ -224,12 +257,12 @@ func TestCompileShowPlaces(t *testing.T) {
 
 	// an explicit .link name does not pull an item without "link" either
 	b2 := newBuild(t, map[string]string{
-		".templates/page.html":     `{{ data.Content }}`,
-		".templates/list.html":     listTemplate,
-		".templates/markdown.html": `[{{ data.URL }}]`,
-		".templates/link.html":     `({{ data.Content }})`,
-		"1-pull.link":              "url=a/x\n",
-		"1-a[A]/0-x|show=page.md":  "hidden",
+		".templates/page.html":      `{{ data.Content }}`,
+		".templates/list.html":      listTemplate,
+		".templates/item.html":      `[{{ data.URL }}]`,
+		".templates/item-pull.html": `({{ data.Content }})`,
+		"1-pull|layout=pull.link":   "url=a/x\n",
+		"1-a[A]/0-x|show=page.md":   "hidden",
 	})
 	b2.compile()
 	b2.want("pull.html", "()")
@@ -451,7 +484,7 @@ func TestCompileIndexItemInPassthroughDir(t *testing.T) {
 	b := newBuild(t, map[string]string{
 		".templates/page.html":           `[{% if data.Content %}{{ data.Content }}{% endif %}]`,
 		".templates/list.html":           listTemplate,
-		".templates/markdown.html":       `{{ data.Content }}`,
+		".templates/item.html":           `{{ data.Content }}`,
 		"1-a.md":                         "a",
 		"fs25/2025-02-17-index[FS25].md": "# FS25",
 		"fs25/slides.pdf":                "%PDF",

@@ -16,6 +16,10 @@ const (
 	PropLayout = "layout"
 	PropSort   = "sort"
 
+	// the same two, applying to the item they are written on and nothing below
+	PropLayoutHere = "layouthere"
+	PropSortHere   = "sorthere"
+
 	// site settings, root .xdocc only
 	PropSymlink  = "symlink"
 	PropMinify   = "minify"
@@ -31,6 +35,13 @@ var structural = map[string]bool{
 	PropNav:  true,
 	PropName: true,
 	PropShow: true,
+}
+
+// local properties are the "here" spelling of an inherited setting: they say
+// what this one item looks like and stop there.
+var local = map[string]bool{
+	PropLayoutHere: true,
+	PropSortHere:   true,
 }
 
 // alias maps a legacy spelling to a canonical key, optionally forcing a value.
@@ -106,10 +117,25 @@ func (p Props) Set(key, value string) {
 			value = a.value
 		}
 	}
-	if key == PropSort || key == PropShow {
+	if key == PropSort || key == PropSortHere || key == PropShow {
 		value = strings.ToLower(strings.TrimSpace(value))
 	}
 	p[key] = value
+}
+
+// setting resolves an inheritable setting: "<key>here" is what this item says
+// about itself and wins, "<key>" is what it says about itself and everything
+// below it, and may have come from above.
+func (p Props) setting(key, here string) string {
+	if v, ok := p[here]; ok {
+		return v
+	}
+	return p[key]
+}
+
+// hasSetting reports whether either spelling of an inheritable setting is set.
+func (p Props) hasSetting(key, here string) bool {
+	return p.Has(here) || p.Has(key)
 }
 
 // Has reports whether the key is present.
@@ -145,7 +171,7 @@ func (p Props) Keys() []string {
 // merge copies every key of src that is not already set in p.
 func (p Props) merge(src Props, inheritedOnly bool) {
 	for k, v := range src {
-		if inheritedOnly && structural[k] {
+		if inheritedOnly && (structural[k] || local[k]) {
 			continue
 		}
 		if _, exists := p[k]; !exists {

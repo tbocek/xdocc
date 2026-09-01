@@ -13,9 +13,9 @@ import (
 func mdBuild(t *testing.T, files map[string]string) *build {
 	t.Helper()
 	base := map[string]string{
-		".templates/page.html":     `<html>{{ data.Content }}</html>`,
-		".templates/markdown.html": `<div>{{ data.Content }}</div>`,
-		".templates/list.html":     `{% for x in data.Items %}{{ x.Content }}{% endfor %}`,
+		".templates/page.html": `<html>{{ data.Content }}</html>`,
+		".templates/item.html": `<div>{{ data.Content }}</div>`,
+		".templates/list.html": `{% for x in data.Items %}{{ x.Content }}{% endfor %}`,
 	}
 	for name, content := range files {
 		base[name] = content
@@ -99,7 +99,7 @@ func TestMarkdownOff(t *testing.T) {
 // change what the page says.
 func TestMarkdownOfAnHTMLItem(t *testing.T) {
 	b := mdBuild(t, map[string]string{
-		".templates/html.html": `<section>{{ data.Content }}</section>`,
+		".templates/item.html": `<section>{{ data.Content }}</section>`,
 		"1-a.html":             "<html><body><p>raw</p></body></html>",
 	})
 	b.compile()
@@ -131,7 +131,7 @@ func TestMarkdownOfABib(t *testing.T) {
 // the page's copy.
 func TestMarkdownFollowsALink(t *testing.T) {
 	b := mdBuild(t, map[string]string{
-		".templates/link.html": `{{ data.Content }}`,
+		".templates/item.html": `{{ data.Content }}`,
 		"1-pull.link":          "url=news/*\n",
 		"2-news[News]/1-a.md":  "first",
 		"2-news[News]/2-b.md":  "second",

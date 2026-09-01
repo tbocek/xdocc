@@ -188,13 +188,17 @@ symlink: false
 layout: default
 ```
 
-`.xdocc` is YAML, with one convenience: a line that is a bare word is a flag, and
-several may share a line the way they do in a filename.
+`.xdocc` is YAML, so `key: value`. The one convenience is that a line may also be
+written the way a filename is — a bare word is a flag, `=` gives it a value, and
+several may share a line — so a property can be lifted out of a filename verbatim.
 
 ```
 show=list-link
 nav|layout=wide
 ```
+
+Both spellings set the same property. Prefer `:` in `.xdocc` and keep `=` for
+filenames, rather than mixing the two in one file.
 
 Three properties **never inherit**, because inheriting them is never what you mean:
 `nav`, `name` and `show`. They describe one item. A `.xdocc` may
@@ -253,7 +257,60 @@ show=list-link        no page of its own: it appears inside its directory's inde
 show=page-link        out of the listing, but a .link file still pulls it in —
                       it shows only where you link to it
 show=page             a page nothing links to on its own
+show=link             nowhere of its own: it appears only where a .link pulls it in
 ```
+
+`show=link` on a **file** keeps it out of its own directory's index while a `.link`
+elsewhere still shows it — an "Archive" button on the front page that would point at
+itself on the archive page. Doing this in the list template instead only hides it from
+the HTML: the markdown twin is built from the items, so the item would still be in it.
+
+`show=link` on a **directory** makes it a **source directory**: nothing on the site can
+reach it, so xdocc reads it for whatever pulls it in and writes none of it — no
+`index.html`, no page per item, and no copies of the files in it, all the way down. It
+is the way to keep a directory of drafts, originals or working files out of the output
+while a `.link` still renders what is in it. A dot-directory does not do this: a hidden
+name is skipped during the walk, so a `.link` cannot see it either.
+
+```
+1-src|show=link/        read, never written
+  1-note.md             rendered wherever a .link pulls it in
+  photo.jpg             not copied — link to a copy that lives in a published directory
+9-front.link            url=src/*
+```
+
+An asset in a source directory is not in the output, so anything that links to it is a
+dead link. Put the files a page needs somewhere the site publishes.
+
+Every combination, on a file — the three places are independent, so this is just the
+truth table:
+
+| `show=` | own page | in its directory's listing | a `.link` pulls it |
+|---|---|---|---|
+| unset = `page-list-link` | yes | yes | yes |
+| `page-list` | yes | yes | — |
+| `page-link` | yes | — | yes |
+| `list-link` | — | yes | yes |
+| `page` | yes | — | — |
+| `list` | — | yes | — |
+| `link` | — | — | yes |
+
+And on a directory, where `page` speaks for the items in it and `list` and `link` speak
+for the directory itself:
+
+| `show=` | own `index.html` | page per item | files copied | in parent's listing | a `.link` pulls it |
+|---|---|---|---|---|---|
+| unset = `page-list-link` | yes | yes | yes | yes | yes |
+| `page-list` | yes | yes | yes | yes | — |
+| `page-link` | yes | yes | yes | — | yes |
+| `list-link` | yes | — | yes | yes | yes |
+| `page` | yes | yes | yes | — | — |
+| `list` | yes | — | yes | yes | — |
+| `link` | — | — | — | — | yes |
+
+`show=page` and `show=page-link` on a directory write an `index.html` that nothing on
+the site links to, which is the same thing `show=page` means on a file. Only
+`show=link` writes nothing.
 
 A `.bib` defaults to `list-link` instead: a list of citations belongs in a listing and
 has no page to be. `show=page-list-link` on one gives it a page anyway.
@@ -261,12 +318,27 @@ has no page to be. `show=page-list-link` on one gives it a page anyway.
 A place xdocc does not know is a typo, and xdocc says so and shows the item
 everywhere — losing content to a misspelling is the worse way to be wrong.
 
-### Settings — inherited down the tree
+### Settings — inherited down the tree, unless written `here`
 
 | Property | Value | Default | Meaning |
 |---|---|---|---|
-| `layout` | text | — | free-form string handed to templates as `.Layout`; templates decide what it means. Set on a directory itself — in its name or its `.xdocc`, not merely inherited — it also selects the list template: the listing renders with `list-<value>.html` if that file is in `.templates`. `layout: root` in the root `.xdocc` gives the front page its own list |
+| `layout` | text | — | free-form string handed to templates as `.Layout`; templates decide what it means. It also selects a template variant where `.templates` has one: a page and the items on it render with `page-<value>.html` and `item-<value>.html` instead of `page.html` and `item.html`, and a directory whose own name or `.xdocc` sets it renders its listing with `list-<value>.html`. `layouthere: root` in the root `.xdocc` gives the front page its own list without touching anything below it |
 | `sort` | `auto`, `asc`, `desc` | `auto` | `auto` sorts dated items newest first and numbered items ascending |
+| `layouthere` | text | — | `layout` for this item alone, passed to nothing below it |
+| `sorthere` | `auto`, `asc`, `desc` | — | `sort` for this listing alone, passed to nothing below it |
+
+Both settings flow down the tree, which is usually what a section wants: `layout: wide`
+on `photos/` is inherited by `photos/2024/` and everything under it. When it is not what
+you want, the `here` spelling says the same thing about one item and stops:
+
+```
+photos|layouthere=wide/
+photos|layouthere=wide/2024/         <- back to whatever photos/ inherited
+```
+
+`layouthere` wins over an inherited `layout` on the item it is written on, and leaves
+what was flowing past untouched — the directory below still sees what the parent said.
+Written on a directory it also selects the list template, exactly as `layout` does.
 
 ### Site settings — root `.xdocc`
 
@@ -337,6 +409,7 @@ still compiles:
 | `nolist` | `show=page` |
 | `linkonly` | `show=page-link` |
 | `n`, `pag`, `dsc` | the words they abbreviated: `name`, `page`, `desc` |
+| `highlight`, `h` | a `.link` file with `limit=`: it picked the one item a `.pre` directory showed, which is a selection made where it is shown, not a mark left on the item |
 | `content`, `paging`, `crop`, `dir-command`, `command-odt` … | — |
 
 ---
@@ -435,20 +508,67 @@ file (section 6).
 ## 8. Templates
 
 Liquid templates in `.templates/` — `{{ }}` for output, `{% %}` for blocks
-(`{% if %}`, `{% for %}` with `forloop.index0`/`first`/`last`). Built-in defaults
-exist for all of them, so you only add the ones you want to override. The data
-structure is bound as `data`, so fields are `data.Name`, `data.Content`, …; inside
-a `{% for x in data.Items %}` loop, the item is `x`.
+(`{% if %}`, `{% for %}` with `forloop.index0`/`first`/`last`). The data structure
+is bound as `data`, so fields are `data.Name`, `data.Content`, …; inside a
+`{% for x in data.Items %}` loop, the item is `x`.
+
+A site provides all five of these. There are no built-in copies to fall back on:
+what a page looks like is written down in the site, and a missing template is an
+error at startup rather than a page that silently renders like some other site.
 
 | Template | Renders |
 |---|---|
 | `page.html` | the surrounding page frame — `<html>`, header, navigation |
 | `list.html` | a directory's listing |
-| `markdown.html` | one markdown item |
-| `html.html` | one HTML item |
-| `link.html` | the result of a `.link` file |
-| `bib.html` | the citations of a `.bib` file |
-| `file.html` | one asset or subdirectory shown in a listing — anything a listing links to rather than shows |
+| `item.html` | one item that has content — a markdown file, an HTML file, a `.link`, the citations of a `.bib` |
+| `file.html` | one asset shown in a listing — a PDF, an image, anything a listing links to rather than shows |
+| `dir.html` | one subdirectory shown in a listing — a section, which is rarely styled like a download |
+
+The plainest set that renders, to start from:
+
+```liquid
+<!-- item.html -->
+{{ data.Content }}
+
+<!-- list.html -->
+{% for it in data.Items %}{{ it.Content }}{% endfor %}
+
+<!-- file.html, and dir.html the same until the two want to differ -->
+<a href="{{ data.Root }}{{ data.Link }}">{% if data.Name %}{{ data.Name }}{% else %}{{ data.FileName }}{% endif %}</a>
+
+<!-- page.html -->
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>{% if data.Name %}{{ data.Name }}{% else %}{{ data.URL }}{% endif %}</title>
+{% if data.MarkdownURL %}<link rel="alternate" type="text/markdown" href="{{ data.MarkdownURL }}">{% endif %}
+</head>
+<body>
+{% if data.GlobalNav %}<nav>{{ data.NavHTML }}</nav>{% endif %}
+<main>
+{{ data.Content }}
+</main>
+</body>
+</html>
+```
+
+There is no template per file type: what a `.bib` looks like is the citations that come
+out of it, and how those are wrapped is a layout question, not a BibTeX one. Any of these
+takes a **layout variant**: with `layout=compact` in force, xdocc renders with
+`item-compact.html` if `.templates` has that file, and with `item.html` if it does not.
+The rule is the same for all five — `page-<value>.html`, `list-<value>.html`,
+`item-<value>.html`, `file-<value>.html`, `dir-<value>.html` — so a section gets its own frame, its own
+listing and its own citations without a property per file type, and a single file gets
+its own by carrying `layout=` in its name. One difference: a listing reads only the
+layout set on the directory itself, since an inherited one would make every listing on
+the site use the root's list template, while an item reads the layout it inherited, which
+is the point. `layouthere` keeps a variant from reaching the directories below.
+
+A site that still has a `markdown.html`, `html.html`, `link.html` or `bib.html` in
+`.templates` is told so on startup: they are not read any more, and the rename is
+`item-<layout>.html` plus `layout=<layout>` wherever it should apply.
 
 The navigation tree is not a template: it is recursive, and Liquid renders includes
 with an empty context, so xdocc builds it in Go and the page template inlines it as
@@ -839,8 +959,8 @@ it:
 <link rel="alternate" type="text/markdown" href="about.md">
 ```
 
-The built-in `page.html` emits that. A site with a `page.html` of its own adds it by
-hand — `data.MarkdownURL` is empty when the page has no copy, so it can be tested:
+`page.html` has to emit it — `data.MarkdownURL` is empty when the page has no copy,
+so it can be tested:
 
 ```liquid
 {% if data.MarkdownURL %}<link rel="alternate" type="text/markdown" href="{{ data.MarkdownURL }}">{% endif %}

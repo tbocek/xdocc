@@ -126,8 +126,20 @@ func parseShow(props Props, handler string, where string) Show {
 	return show
 }
 
+// publishes reports whether a directory writes anything of its own. A directory
+// that is in no listing, gives its items no page and is in no navigation is
+// reachable from nowhere - that is what "show=link" says - so xdocc reads it
+// for whatever pulls it in and writes nothing of it: no index, no pages, no
+// copies of its files. The root is the site and always publishes.
+func (i *Item) publishes() bool {
+	if !i.IsDir || i.Parent == nil {
+		return true
+	}
+	return i.Show().List || i.Show().Page || i.IsNav()
+}
+
 // Layout is the free-form layout hint handed to templates.
-func (i *Item) Layout() string { return i.Props[PropLayout] }
+func (i *Item) Layout() string { return i.Props.setting(PropLayout, PropLayoutHere) }
 
 // Link is where this item is reachable, relative to the site root. It is the
 // item's own page when it has one, and the index of its directory when it has
@@ -165,7 +177,7 @@ func (i *Item) Root() string {
 
 // Sort returns the sort order that applies to this directory's listing.
 func (i *Item) Sort() string {
-	switch strings.ToLower(i.Props[PropSort]) {
+	switch strings.ToLower(i.Props.setting(PropSort, PropSortHere)) {
 	case SortAsc:
 		return SortAsc
 	case SortDesc:

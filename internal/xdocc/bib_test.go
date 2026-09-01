@@ -313,7 +313,7 @@ func TestCompileBibIsCached(t *testing.T) {
 	b, run := warm(t, map[string]string{
 		".templates/page.html": `{{ data.Content }}`,
 		".templates/list.html": `{% for x in data.Items %}{{ x.Content }}{% endfor %}`,
-		".templates/bib.html":  `{{ data.Content }}`,
+		".templates/item.html": `{{ data.Content }}`,
 		"1-refs.bib":           `@misc{a, title = {One}, year = {2020}}`,
 	})
 	run()

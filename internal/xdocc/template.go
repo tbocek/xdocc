@@ -2,6 +2,7 @@ package xdocc
 
 import (
 	"fmt"
+	"log"
 	"os"
 	"path"
 	"path/filepath"
@@ -11,59 +12,29 @@ import (
 	"github.com/osteele/liquid"
 )
 
-// Template names. A site overrides any of them by dropping a file of the same
-// name into .templates.
+// Template names. A site provides all of them in .templates; xdocc has no
+// built-in copies, so what a page looks like is written down in the site.
 const (
-	TemplatePage     = "page.html"
-	TemplateList     = "list.html"
-	TemplateMarkdown = "markdown.html"
-	TemplateHTML     = "html.html"
-	TemplateLink     = "link.html"
-	TemplateBib      = "bib.html"
-	TemplateFile     = "file.html"
-	TemplateNav      = "nav.html"
+	TemplatePage      = "page.html"
+	TemplateList      = "list.html"
+	TemplateItem      = "item.html"
+	TemplateFile      = "file.html"
+	TemplateDirectory = "dir.html"
 )
 
-// handlerTemplate maps a handler to the template that renders one of its items.
-// A directory has no handler of its own and is rendered by file.html, the same
-// as an asset: both are an item a listing links to rather than shows.
-var handlerTemplate = map[string]string{
-	HandlerMarkdown: TemplateMarkdown,
-	HandlerHTML:     TemplateHTML,
-	HandlerLink:     TemplateLink,
-	HandlerBib:      TemplateBib,
-	HandlerAsset:    TemplateFile,
-}
+// retired are the templates xdocc used to pick by file type. There is one
+// template for an item now and the layout chooses between variants of it, so a
+// site that still has these is one rename away from what it meant.
+var retired = []string{"markdown.html", "html.html", "link.html", "bib.html"}
 
-// defaultTemplates are the built-in templates, in Liquid. A site overrides any
-// of them by dropping a same-named file into .templates.
-var defaultTemplates = map[string]string{
-	TemplatePage: `<!DOCTYPE html>
-<html>
-<head>
-<meta charset="utf-8">
-<meta name="viewport" content="width=device-width, initial-scale=1">
-<title>{% if data.Name %}{{ data.Name }}{% else %}{{ data.URL }}{% endif %}</title>
-{% if data.MarkdownURL %}<link rel="alternate" type="text/markdown" href="{{ data.MarkdownURL }}">{% endif %}
-</head>
-<body>
-{% if data.GlobalNav %}<nav>{{ data.NavHTML }}</nav>{% endif %}
-<main>
-{{ data.Content }}
-</main>
-</body>
-</html>
-`,
-	// nav.html is not a template: the navigation tree is recursive, and Liquid
-	// renders {% include %} with an empty context, so the tree is built in Go
-	// (see NavHTML) and the page template inlines the result.
-	TemplateList:     `{% for it in data.Items %}{{ it.Content }}{% endfor %}`,
-	TemplateMarkdown: `{{ data.Content }}`,
-	TemplateHTML:     `{{ data.Content }}`,
-	TemplateLink:     `{{ data.Content }}`,
-	TemplateBib:      `{{ data.Content }}`,
-	TemplateFile:     `<a href="{{ data.Root }}{{ data.Link }}">{% if data.Name %}{{ data.Name }}{% else %}{{ data.FileName }}{% endif %}</a>`,
-}
+// required are the templates every site has to provide. There are no built-in
+// copies to fall back on: a missing one is a broken site, not a site that
+// silently renders like some other site.
+//
+// nav.html is not among them and is not a template: the navigation tree is
+// recursive, and Liquid renders {% include %} with an empty context, so the
+// tree is built in Go (see NavHTML) and page.html inlines the result.
+var required = []string{TemplatePage, TemplateList, TemplateItem, TemplateFile, TemplateDirectory}
 
 // filterFuncs are the xdocc-specific Liquid filters, registered on top of the
 // standard set. Liquid has no arithmetic in {{ }}, so the numeric helpers a
@@ -82,8 +53,7 @@ var filterFuncs = map[string]any{
 	"replace":    func(s string, old, new string) string { return strings.ReplaceAll(s, old, new) },
 }
 
-// Templates is the template set of a site: the built-in defaults, with the
-// files of .templates layered on top.
+// Templates is the template set of a site: the files of its .templates dir.
 type Templates struct {
 	engine  *liquid.Engine
 	tmpls   map[string]*liquid.Template
@@ -91,7 +61,8 @@ type Templates struct {
 	ModTime time.Time // newest template file, for the cache
 }
 
-// LoadTemplates parses the built-in templates and everything in dir.
+// LoadTemplates parses everything in dir, and fails unless the site provides
+// every required template.
 func LoadTemplates(dir string) (*Templates, error) {
 	eng := liquid.NewEngine()
 	for name, fn := range filterFuncs {
@@ -100,17 +71,10 @@ func LoadTemplates(dir string) (*Templates, error) {
 	eng.RegisterTemplateStore(&liquidStore{dir: dir})
 	t := &Templates{engine: eng, tmpls: map[string]*liquid.Template{}, Dir: dir}
 
-	for name, text := range defaultTemplates {
-		tmpl, err := eng.ParseTemplate([]byte(text))
-		if err != nil {
-			return nil, fmt.Errorf("built-in template %s: %w", name, err)
-		}
-		t.tmpls[name] = tmpl
-	}
-
 	entries, err := os.ReadDir(dir)
 	if os.IsNotExist(err) {
-		return t, nil
+		return nil, fmt.Errorf("%s: no template directory: a site provides %s",
+			dir, strings.Join(required, ", "))
 	}
 	if err != nil {
 		return nil, err
@@ -136,6 +100,23 @@ func LoadTemplates(dir string) (*Templates, error) {
 		if info, err := entry.Info(); err == nil && info.ModTime().After(t.ModTime) {
 			t.ModTime = info.ModTime()
 		}
+	}
+	for _, name := range retired {
+		if _, ok := t.tmpls[name]; ok {
+			log.Printf("xdocc: %s is not used any more: every item renders with %s, "+
+				"and a layout picks a variant of it - rename this to item-<layout>.html "+
+				"and set layout=<layout> where it should apply",
+				filepath.Join(dir, name), TemplateItem)
+		}
+	}
+	var missing []string
+	for _, name := range required {
+		if !t.Has(name) {
+			missing = append(missing, name)
+		}
+	}
+	if len(missing) > 0 {
+		return nil, fmt.Errorf("%s: missing template %s", dir, strings.Join(missing, ", "))
 	}
 	return t, nil
 }

@@ -123,3 +123,69 @@ func TestShowIsNotInherited(t *testing.T) {
 	b.want("news/first.html", "<p>first</p>")
 	b.want("news/index.html", "[news/first.html]")
 }
+
+func TestLayoutHereDoesNotInherit(t *testing.T) {
+	b := newBuild(t, map[string]string{
+		".templates/page.html": `{{ data.Content }}`,
+		".templates/list.html": `{% for x in data.Items %}[{{ x.Layout }}]{% endfor %}`,
+		".xdocc":               "layout: root\n",
+		// layouthere describes this directory and stops there, so what the root
+		// says keeps flowing past it to the directory below
+		"1-here/.xdocc":       "layouthere: wide\n",
+		"1-here/1-a.md":       "a",
+		"1-here/2-sub/1-b.md": "b",
+		// the inherited spelling still reaches all the way down
+		"2-down/.xdocc":       "layout: narrow\n",
+		"2-down/1-c.md":       "c",
+		"2-down/2-sub/1-d.md": "d",
+	})
+	b.compile()
+	b.want("index.html", "[wide][narrow]")
+	// the items inside see the root layout, not the one written "here"
+	b.want("here/index.html", "[root][root]")
+	b.want("here/sub/index.html", "[root]")
+	b.want("down/index.html", "[narrow][narrow]")
+	b.want("down/sub/index.html", "[narrow]")
+}
+
+func TestLayoutHereWinsOverInherited(t *testing.T) {
+	b := newBuild(t, map[string]string{
+		".templates/page.html":  `{{ data.Content }}`,
+		".templates/list.html":  `{% for x in data.Items %}[{{ x.Layout }}]{% endfor %}`,
+		".xdocc":                "layout: root\n",
+		"1-a|layouthere=own.md": "a",
+		"2-b.md":                "b",
+	})
+	b.compile()
+	b.want("index.html", "[own][root]")
+}
+
+func TestLayoutHereSelectsListTemplate(t *testing.T) {
+	b := newBuild(t, map[string]string{
+		".templates/page.html":      `{{ data.Content }}`,
+		".templates/list.html":      `plain`,
+		".templates/list-wide.html": `wide`,
+		"1-dir/.xdocc":              "layouthere: wide\n",
+		"1-dir/1-a.md":              "a",
+		"1-dir/2-sub/1-b.md":        "b",
+	})
+	b.compile()
+	// set on the directory itself, so it picks the list template - and, being
+	// local, leaves the directory below on the plain one
+	b.want("dir/index.html", "wide")
+	b.want("dir/sub/index.html", "plain")
+}
+
+func TestSortHereDoesNotInherit(t *testing.T) {
+	b := newBuild(t, map[string]string{
+		".templates/page.html":                `{{ data.Content }}`,
+		".templates/list.html":                `{% for x in data.Items %}[{{ x.Name }}]{% endfor %}`,
+		"1-dir|sorthere=desc/1-a[a].md":       "a",
+		"1-dir|sorthere=desc/2-b[b].md":       "b",
+		"1-dir|sorthere=desc/3-sub/1-c[c].md": "c",
+		"1-dir|sorthere=desc/3-sub/2-d[d].md": "d",
+	})
+	b.compile()
+	b.want("dir/index.html", "[sub][b][a]")
+	b.want("dir/sub/index.html", "[c][d]")
+}
