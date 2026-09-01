@@ -14,8 +14,12 @@ import (
 )
 
 // debounce is how long the watcher waits for the file system to settle before
-// it recompiles. Editors write in bursts.
-const debounce = 200 * time.Millisecond
+// it recompiles: every event pushes the build further out, so a build happens
+// once nothing has changed for this long. Editors write in bursts, and an
+// upload of a whole tree over WebDAV is one long burst - rebuilding inside it
+// costs a walk of the source per file that arrives and publishes a site that
+// is half uploaded.
+const debounce = 500 * time.Millisecond
 
 // Watch compiles the site and then recompiles it whenever the source changes.
 // It returns when the context is cancelled.
