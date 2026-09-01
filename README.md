@@ -707,8 +707,9 @@ the stack answers `Accept: text/markdown` out of the box and serves the `.br` an
 xdocc already wrote. It reaches the container as a Swarm config rather than a mount,
 because a volume would start empty and a bind mount would have to exist on whatever node
 the task lands on. Swarm configs are immutable, so **editing the Caddyfile means bumping
-`xdocc-caddyfile-v1` in the stack** — a redeploy that changes the content under an
-unchanged name fails with `only updates to Labels are allowed`.
+`xdocc-caddyfile-v2` in the stack** — a redeploy that changes the content under an
+unchanged name fails with `only updates to Labels are allowed`. The version it replaces
+is left behind and can be deleted under *Configs* once the redeploy is through.
 
 `/dav` on that same port is **WebDAV onto the source**, so the site can be edited by
 mounting `https://xdocc.sifs0005.infs.ch/dav/` in a file manager: drop a file in, the
