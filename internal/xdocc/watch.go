@@ -19,7 +19,7 @@ import (
 // upload of a whole tree over WebDAV is one long burst - rebuilding inside it
 // costs a walk of the source per file that arrives and publishes a site that
 // is half uploaded.
-const debounce = 500 * time.Millisecond
+const debounce = 250 * time.Millisecond
 
 // Watch compiles the site and then recompiles it whenever the source changes.
 // It returns when the context is cancelled.
