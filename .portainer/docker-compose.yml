@@ -17,15 +17,10 @@ services:
       - web
     volumes:
       - www:/srv/www:ro
-      # rw, because this is the end WebDAV writes to
       - site:/srv/site:rw
-    # caddy substitutes environment variables into the Caddyfile, not files,
-    # and a swarm secret is a file - so it is read in as an env file
-    command: >-
-      caddy run --config /etc/caddy/Caddyfile --adapter caddyfile
-      --envfile /run/secrets/webdav_env
     secrets:
-      - webdav_env
+      - DSL_WEBDAV_USER
+      - DSL_WEBDAV_HASH
     configs:
       - source: caddyfile
         target: /etc/caddy/Caddyfile
@@ -49,7 +44,7 @@ configs:
     name: xdocc-caddyfile-v1
 
 secrets:
-  # one line, "WEBDAV_HASH=<caddy hash-password output>"
-  webdav_env:
+  DSL_WEBDAV_USER:
     external: true
-    name: xdocc-webdav-env-v1
+  DSL_WEBDAV_HASH:
+    external: true

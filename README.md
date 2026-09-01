@@ -721,21 +721,23 @@ binary — so [`.portainer/Dockerfile`](.portainer/Dockerfile) runs `xcaddy buil
 github.com/mholt/caddy-webdav` and the release workflow pushes the result as
 `ghcr.io/tbocek/xdocc-caddy:latest`.
 
-The `basic_auth` block is in the Caddyfile, with the username in plain sight and only
-the hash coming from a **Swarm secret** — made in Portainer under *Secrets* before the
-stack is deployed, named `xdocc-webdav-env-v1`, and holding one line:
+The credentials are **Swarm secrets**, made in Portainer under *Secrets* before the
+stack is deployed: `DSL_WEBDAV_USER` holding the username and `DSL_WEBDAV_HASH` holding
+what `caddy hash-password` printed. The Caddyfile then reads
 
-```
-WEBDAV_HASH=$2a$14$Xk...the.rest.of.what.caddy.hash-password.printed
+```caddyfile
+basic_auth {
+	{$DSL_WEBDAV_USER} {$DSL_WEBDAV_HASH}
+}
 ```
 
-Caddy substitutes environment variables into a Caddyfile, not files, and a Swarm secret
-is a file — so the stack starts Caddy with `--envfile /run/secrets/webdav_env` and the
-Caddyfile writes `{$WEBDAV_HASH}`. The `$` in the hash needs no escaping there, which it
-would in a compose `environment:` value. Secrets are immutable like configs, so changing
-the password means a new secret under a new name and the same bump in the stack file,
-and the secret has to exist — Caddy will not start without the env file, which takes the
-site down with it.
+Caddy substitutes environment variables into a Caddyfile but not files, and a Swarm
+secret arrives as a file — so [`.portainer/entrypoint.sh`](.portainer/entrypoint.sh)
+exports every file under `/run/secrets` as a variable of the same name before starting
+Caddy. Name the secret after the variable and it lands where the Caddyfile expects it.
+Nothing needs escaping this way, which the `$` of the hash would in a compose
+`environment:` value. Secrets are immutable, so a new password is a new secret — remove
+the old one and add it again under the same name, then redeploy.
 
 Basic auth sends the password in clear, so the ingress in front has to be the one
 terminating HTTPS. To do without WebDAV entirely, drop the two `/dav` handles and the

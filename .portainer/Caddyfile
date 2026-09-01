@@ -10,8 +10,7 @@
 	}
 	handle /dav/* {
 		basic_auth {
-			# the hash comes from the swarm secret, read in with --envfile
-			{$WEBDAV_USER} {$WEBDAV_HASH}
+			{$DSL_WEBDAV_USER} {$DSL_WEBDAV_HASH}
 		}
 		webdav {
 			root /srv/site
