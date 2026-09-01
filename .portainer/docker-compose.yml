@@ -41,7 +41,7 @@ networks:
 configs:
   caddyfile:
     file: ./Caddyfile
-    name: xdocc-caddyfile-v2
+    name: xdocc-caddyfile-v3
 
 secrets:
   DSL_WEBDAV_USER:
