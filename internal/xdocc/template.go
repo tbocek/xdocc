@@ -2,7 +2,6 @@ package xdocc
 
 import (
 	"fmt"
-	"log"
 	"os"
 	"path"
 	"path/filepath"
@@ -21,11 +20,6 @@ const (
 	TemplateFile      = "file.html"
 	TemplateDirectory = "dir.html"
 )
-
-// retired are the templates xdocc used to pick by file type. There is one
-// template for an item now and the layout chooses between variants of it, so a
-// site that still has these is one rename away from what it meant.
-var retired = []string{"markdown.html", "html.html", "link.html", "bib.html"}
 
 // required are the templates every site has to provide. There are no built-in
 // copies to fall back on: a missing one is a broken site, not a site that
@@ -99,14 +93,6 @@ func LoadTemplates(dir string) (*Templates, error) {
 		t.tmpls[entry.Name()] = tmpl
 		if info, err := entry.Info(); err == nil && info.ModTime().After(t.ModTime) {
 			t.ModTime = info.ModTime()
-		}
-	}
-	for _, name := range retired {
-		if _, ok := t.tmpls[name]; ok {
-			log.Printf("xdocc: %s is not used any more: every item renders with %s, "+
-				"and a layout picks a variant of it - rename this to item-<layout>.html "+
-				"and set layout=<layout> where it should apply",
-				filepath.Join(dir, name), TemplateItem)
 		}
 	}
 	var missing []string

@@ -51,10 +51,11 @@ type alias struct {
 	fixed bool
 }
 
-// One spelling per property, plus the short forms the tree already says:
-// "l=" for layout, "asc"/"desc" for sort.
+// One spelling per property, plus the two sort words the tree already says.
+// "l" is gone on purpose: it was the old tree's shorthand for limit but stood
+// for layout here, so an "l=4" silently asked for a template variant instead
+// of limiting a listing. A property that can be misread is better refused.
 var aliases = map[string]alias{
-	"l":    {key: PropLayout},
 	"asc":  {key: PropSort, value: SortAsc, fixed: true},
 	"desc": {key: PropSort, value: SortDesc, fixed: true},
 }
@@ -66,7 +67,7 @@ var aliases = map[string]alias{
 // post-processing belongs to whatever starts xdocc.
 var dropped = map[string]bool{
 	"hidden": true, "hide": true, "hid": true,
-	"noindex": true, "nidx": true,
+	"noindex": true,
 	// short spellings that were only ever noise: one word per property is enough
 	"n": true, "pag": true, "dsc": true,
 	"copy": true, "cp": true,
