@@ -1,0 +1,55 @@
+version: '3.8'
+
+services:
+  # generates the site; listens on nothing, so it carries no caddy labels
+  xdocc:
+    image: ghcr.io/tbocek/xdocc:latest
+    user: "1000:1000"
+    volumes:
+      - site:/srv/site:ro
+      - www:/srv/www:rw
+
+  # serves what xdocc generated, and takes the source in over WebDAV
+  web:
+    image: ghcr.io/tbocek/xdocc-caddy:latest
+    networks:
+      - default
+      - web
+    volumes:
+      - www:/srv/www:ro
+      # rw, because this is the end WebDAV writes to
+      - site:/srv/site:rw
+    # caddy substitutes environment variables into the Caddyfile, not files,
+    # and a swarm secret is a file - so it is read in as an env file
+    command: >-
+      caddy run --config /etc/caddy/Caddyfile --adapter caddyfile
+      --envfile /run/secrets/webdav_env
+    secrets:
+      - webdav_env
+    configs:
+      - source: caddyfile
+        target: /etc/caddy/Caddyfile
+    deploy:
+      labels:
+        caddy: xdocc.sifs0005.infs.ch
+        caddy.reverse_proxy: '{{upstreams http 8080}}'
+
+volumes:
+  site: {}
+  www: {}
+
+networks:
+  web:
+    external: true
+    name: web
+
+configs:
+  caddyfile:
+    file: ./Caddyfile
+    name: xdocc-caddyfile-v1
+
+secrets:
+  # one line, "WEBDAV_HASH=<caddy hash-password output>"
+  webdav_env:
+    external: true
+    name: xdocc-webdav-env-v1

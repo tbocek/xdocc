@@ -1,0 +1,42 @@
+{
+	admin off
+	auto_https off
+	order webdav before file_server
+}
+
+:8080 {
+	handle /dav {
+		redir /dav/
+	}
+	handle /dav/* {
+		basic_auth {
+			# the hash comes from the swarm secret, read in with --envfile
+			{$WEBDAV_USER} {$WEBDAV_HASH}
+		}
+		webdav {
+			root /srv/site
+			prefix /dav
+		}
+	}
+
+	# everything else is the generated site
+	handle {
+		root * /srv/www
+
+		header Vary Accept
+
+		@markdown header Accept *text/markdown*
+		handle @markdown {
+			@page path_regexp page ^(.*)\.html$
+			rewrite @page {re.page.1}.md
+			@dir path */
+			rewrite @dir {path}index.md
+			try_files {path} {http.request.orig_uri.path}
+		}
+
+		# serves the .gz and .br xdocc already wrote instead of compressing again
+		file_server {
+			precompressed br gzip
+		}
+	}
+}
