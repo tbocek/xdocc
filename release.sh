@@ -37,6 +37,12 @@ done
 [[ -z "$(git status --porcelain)" ]] ||
 	die "the working tree is not clean, commit or stash first"
 
+# the release commit goes on the branch that is checked out, and that is the
+# branch Portainer watches
+BRANCH="$(git symbolic-ref --quiet --short HEAD)" ||
+	die "HEAD is detached, check out the branch you release from"
+readonly BRANCH
+
 # ---------------------------------------------------------------- version
 
 # the next version is one past the highest that exists anywhere
@@ -58,8 +64,28 @@ for tag in "${VERSION}" "${SEMVER}"; do
 	fi
 done
 
+# ---------------------------------------------------------------- bump
+
+# What the stack runs is what .portainer/docker-compose.yml says, so the
+# release writes its own version into it and the tag contains the file that
+# deploys it. The swarm config is renamed along with the images because a
+# config is immutable: an edited Caddyfile only reaches the stack under a name
+# it has not been deployed under before.
+step "writing ${VERSION} into the stack"
+sed -i -E \
+	-e "s|^(    image: ghcr.io/[^:]+):.+$|\1:${VERSION}|" \
+	-e "s|^(    name: xdocc-caddyfile)-.+$|\1-${VERSION}|" \
+	.portainer/docker-compose.yml
+git diff --quiet -- .portainer/docker-compose.yml &&
+	die "the stack file did not change, its image lines are not what this expects"
+git commit --quiet -am "release ${VERSION}"
+
 # ---------------------------------------------------------------- tag
 
+# The tag only. Pushing it sends the commit as well, so the workflow can build
+# from it, but it leaves ${BRANCH} where it was - and ${BRANCH} is what
+# Portainer watches, so nothing deploys until the images exist. A build that
+# fails leaves the release commit unpushed and the site untouched.
 step "tagging ${VERSION}"
 git tag -a "${VERSION}" -m "xdocc ${VERSION}"
 git push --quiet origin "${VERSION}"
@@ -120,7 +146,12 @@ assets="$(jq '.assets | length' <<<"${GH_BODY}" 2>/dev/null || echo 0)"
 [[ "${assets}" -ge "${EXPECTED}" ]] ||
 	die "the build succeeded but ${VERSION} has only ${assets} of ${EXPECTED} assets, see ${TAG_URL}"
 
-# Only now: a build that failed leaves no version for Go to find, and the
+# Only now: the images are up, so the stack file may name them. This push is
+# the deploy - Portainer polls ${BRANCH} and redeploys on a new commit.
+step "pushing ${BRANCH}, which is what deploys"
+git push --quiet origin "${BRANCH}"
+
+# And only now: a build that failed leaves no version for Go to find, and the
 # workflow triggers on v*, so pushing this while the run was still being waited
 # on would have put a second run on the same commit.
 step "tagging ${SEMVER}, the name go install resolves"
@@ -130,4 +161,5 @@ git push --quiet origin "${SEMVER}"
 step "done: ${VERSION} is out with ${assets} assets"
 echo "    ${TAG_URL}"
 echo "    docker pull ${IMAGE}:${VERSION}"
+echo "    docker pull ${IMAGE}-caddy:${VERSION}"
 echo "    go install github.com/${SLUG}/cmd/xdocc@${SEMVER}"

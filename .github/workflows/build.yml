@@ -51,8 +51,9 @@ jobs:
           cache-from: type=gha
           cache-to: type=gha,mode=max
 
-  # Caddy with the WebDAV module linked in, for the Portainer stack. It has
-  # nothing to do with the xdocc version and only rides along on the tag.
+  # Caddy with the WebDAV module linked in, for the Portainer stack. Its
+  # contents have nothing to do with the xdocc version; it carries the tag so
+  # that a stack can name one image per release and get a matching pair.
   caddy:
     runs-on: ubuntu-latest
     if: ${{ !contains(github.ref_name, '.') }}
@@ -69,6 +70,8 @@ jobs:
           context: .portainer
           platforms: linux/amd64
           push: true
-          tags: ghcr.io/${{ github.repository }}-caddy:latest
+          tags: |
+            ghcr.io/${{ github.repository }}-caddy:${{ github.ref_name }}
+            ghcr.io/${{ github.repository }}-caddy:latest
           cache-from: type=gha
           cache-to: type=gha,mode=max
