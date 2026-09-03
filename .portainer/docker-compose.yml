@@ -26,7 +26,7 @@ services:
         target: /etc/caddy/Caddyfile
     deploy:
       labels:
-        caddy: xdocc.sifs0005.infs.ch
+        caddy: dsl.i-ost.ch
         caddy.reverse_proxy: '{{upstreams http 8080}}'
 
 volumes:
