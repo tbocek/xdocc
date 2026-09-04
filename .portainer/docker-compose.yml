@@ -3,7 +3,8 @@ version: '3.8'
 services:
   # generates the site; listens on nothing, so it carries no caddy labels
   xdocc:
-    image: ghcr.io/tbocek/xdocc:v8
+    image: ghcr.io/tbocek/xdocc:v9
+
     user: "1000:1000"
     volumes:
       - site:/srv/site:ro
@@ -11,7 +12,7 @@ services:
 
   # serves what xdocc generated, and takes the source in over WebDAV
   web:
-    image: ghcr.io/tbocek/xdocc-caddy:v8
+    image: ghcr.io/tbocek/xdocc-caddy:v9
     networks:
       - default
       - web
@@ -26,7 +27,7 @@ services:
         target: /etc/caddy/Caddyfile
     deploy:
       labels:
-        caddy: xdocc.sifs0005.infs.ch
+        caddy: dsl.i-ost.ch
         caddy.reverse_proxy: '{{upstreams http 8080}}'
 
 volumes:
@@ -41,7 +42,8 @@ networks:
 configs:
   caddyfile:
     file: ./Caddyfile
-    name: xdocc-caddyfile-v8
+    name: xdocc-caddyfile-v9
+
 
 secrets:
   DSL_WEBDAV_USER:
