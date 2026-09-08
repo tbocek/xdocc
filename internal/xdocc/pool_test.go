@@ -8,7 +8,7 @@ import (
 )
 
 func TestWorkersSetting(t *testing.T) {
-	def := runtime.NumCPU() + 1
+	def := runtime.GOMAXPROCS(0) + 1
 	tests := []struct {
 		xdocc string
 		want  int

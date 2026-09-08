@@ -152,8 +152,22 @@ func (s *Site) takeDirty() (paths []string, full bool) {
 // cannot be patched in place falls back to a full walk.
 func (s *Site) refresh() error {
 	paths, full := s.takeDirty()
+	// Taking the list empties it, so a build that then fails would be the only
+	// one that ever knew about those files: the next event would rebuild
+	// without them and the change would sit in the source, unpublished, until
+	// the rescan came round. A failed build leaves the tree in a state nothing
+	// can reason about anyway, so it asks the next one to read everything.
+	failed := true
+	defer func() {
+		if failed {
+			s.Invalidate()
+		}
+	}()
+
 	if s.Root == nil || full {
-		return s.Load()
+		err := s.Load()
+		failed = err != nil
+		return err
 	}
 	reload := false
 	for _, p := range paths {
@@ -166,8 +180,11 @@ func (s *Site) refresh() error {
 		}
 	}
 	if reload {
-		return s.Load()
+		err := s.Load()
+		failed = err != nil
+		return err
 	}
+	failed = false
 	return nil
 }
 

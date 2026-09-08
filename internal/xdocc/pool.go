@@ -65,7 +65,13 @@ func (p *pool) wait() error {
 // compressing at the highest setting is processor-bound, and the one worker
 // above the processor count covers the moments one of them is waiting on the
 // disk instead of working.
-func defaultWorkers() int { return runtime.NumCPU() + 1 }
+//
+// GOMAXPROCS rather than NumCPU: in a container NumCPU is the machine's core
+// count, which the process may have no right to. The Go runtime already works
+// out what it is allowed - cgroup quota, affinity mask - and a worker costs
+// memory as well as processor, so asking for 33 of them on a host that lets us
+// have 2 buys nothing and can cost the container its life.
+func defaultWorkers() int { return runtime.GOMAXPROCS(0) + 1 }
 
 // Workers is how many output files are minified, compressed and written at
 // once. Defaults to one more than the number of processors; "workers: 1" in
