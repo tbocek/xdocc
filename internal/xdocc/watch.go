@@ -7,6 +7,7 @@ import (
 	"log"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"time"
 
@@ -52,7 +53,8 @@ func (s *Site) Watch(ctx context.Context) error {
 	// read, and it stands for the life of the process. What is being watched and
 	// how often it is reread are one fact, so they are one line.
 	var rescan <-chan time.Time
-	watching := fmt.Sprintf("xdocc: watching %s", s.Source)
+	watching := fmt.Sprintf("xdocc: watching %s, building %s after the last change",
+		s.Source, debounce)
 	if every := s.Rescan(); every > 0 {
 		ticker := time.NewTicker(every)
 		defer ticker.Stop()
@@ -60,6 +62,8 @@ func (s *Site) Watch(ctx context.Context) error {
 		watching += fmt.Sprintf(", rereading the whole tree every %s", every)
 	}
 	log.Print(watching)
+
+	var pending changes
 	for {
 		select {
 		case <-ctx.Done():
@@ -77,6 +81,7 @@ func (s *Site) Watch(ctx context.Context) error {
 				continue
 			}
 			s.classify(watcher, event)
+			pending.saw(s.Source, event)
 			timer.Reset(debounce)
 		case err, ok := <-watcher.Errors:
 			if !ok {
@@ -93,19 +98,85 @@ func (s *Site) Watch(ctx context.Context) error {
 			log.Printf("xdocc: watch: %v", err)
 		case <-rescan:
 			s.Invalidate()
+			pending.sawOther("the rescan came round")
 			timer.Reset(debounce)
 		case <-timer.C:
+			cause := pending.take()
 			start := time.Now()
 			result, err := s.Compile()
 			if err != nil {
-				log.Printf("xdocc: %v", err)
+				log.Printf("xdocc: %s: %v", cause, err)
 				continue
 			}
 			if result.Written == 0 && result.Removed == 0 {
 				continue // nothing to say: a rescan that found nothing
 			}
-			log.Printf("xdocc: %s in %s", result, time.Since(start).Round(time.Millisecond))
+			log.Printf("xdocc: %s in %s, %s", result,
+				time.Since(start).Round(time.Millisecond), cause)
 		}
+	}
+}
+
+// changes is what the watcher has seen since the last build, so that a build
+// can say what it was for. The log line is the only view a running service
+// gives of the path from a file landing to a page changing, and the two
+// questions it has to answer are which file did it and how long the file sat
+// there - "slow" is either a build that came late or an upload that did.
+type changes struct {
+	first time.Time // when the first change of this batch arrived
+	names []string  // the first few, named; enough to recognise the edit
+	more  int       // how many further changes there were
+	other string    // a cause that is not a file, e.g. the rescan
+}
+
+// saw records one file system event.
+func (c *changes) saw(source string, event fsnotify.Event) {
+	c.mark()
+	name := event.Name
+	if rel, err := filepath.Rel(source, name); err == nil {
+		name = rel
+	}
+	if slices.Contains(c.names, name) {
+		return
+	}
+	if len(c.names) < 3 {
+		c.names = append(c.names, name)
+		return
+	}
+	c.more++
+}
+
+// sawOther records a cause that no file explains.
+func (c *changes) sawOther(why string) {
+	c.mark()
+	c.other = why
+}
+
+func (c *changes) mark() {
+	if c.first.IsZero() {
+		c.first = time.Now()
+	}
+}
+
+// take describes the batch and clears it. The wait it reports is from the first
+// change to now, so it covers the debounce and anything the build queued behind
+// - a wait far above the debounce is the interesting case, and it means the
+// events kept coming, not that xdocc was idle.
+func (c *changes) take() string {
+	defer func() { *c = changes{} }()
+	if c.first.IsZero() {
+		return "for no change anyone reported"
+	}
+	waited := time.Since(c.first).Round(time.Millisecond)
+	switch {
+	case len(c.names) == 0:
+		return fmt.Sprintf("%s %s ago", c.other, waited)
+	case c.more > 0:
+		return fmt.Sprintf("for %s and %d more, %s after the first",
+			strings.Join(c.names, ", "), c.more, waited)
+	default:
+		return fmt.Sprintf("for %s, %s after the first",
+			strings.Join(c.names, ", "), waited)
 	}
 }
 
@@ -116,7 +187,14 @@ func (s *Site) Watch(ctx context.Context) error {
 func (s *Site) classify(watcher *fsnotify.Watcher, event fsnotify.Event) {
 	if event.Has(fsnotify.Create) || event.Has(fsnotify.Remove) || event.Has(fsnotify.Rename) {
 		if info, err := os.Stat(event.Name); err == nil && info.IsDir() {
-			_ = s.addWatches(watcher, event.Name)
+			// A directory nobody is watching is a directory whose files only
+			// ever reach the site on the next rescan, which looks like xdocc
+			// being slow rather than xdocc being deaf. The usual reason is the
+			// kernel's watch limit, so say which directory and why.
+			if err := s.addWatches(watcher, event.Name); err != nil {
+				log.Printf("xdocc: cannot watch %s, its changes will only be "+
+					"seen by the rescan: %v", event.Name, err)
+			}
 		}
 		s.Invalidate()
 		return

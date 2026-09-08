@@ -23,6 +23,12 @@
 		root * /srv/www
 
 		header Vary Accept
+		# file_server sends no Cache-Control, and a browser with none of its
+		# own guesses: roughly a tenth of the file's age, so a page untouched
+		# for a week is held for hours and an edit does not show up.
+		# "no-cache" is revalidate, not do-not-store - the ETag turns the check
+		# into a 304 and the bytes are only sent when they really changed.
+		header Cache-Control "no-cache"
 
 		@markdown header Accept *text/markdown*
 		handle @markdown {

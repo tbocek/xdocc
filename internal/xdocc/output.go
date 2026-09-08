@@ -105,9 +105,27 @@ func gzipBytes(data []byte) ([]byte, error) {
 	return buf.Bytes(), nil
 }
 
+// brotliWindow is the base 2 log of the sliding window brotli compresses with.
+// The window is what lets the encoder point back at something it has already
+// seen, so a window larger than the file buys nothing at all - and at the
+// highest quality the encoder allocates its tables from the window, about
+// 90 MB each at the default. Everything xdocc compresses is text, and the
+// largest page here is well under a megabyte, so the window is sized to the
+// file: 10 (1 KB) is the smallest brotli allows, 24 the largest.
+func brotliWindow(size int) int {
+	lgwin := 10
+	for lgwin < 24 && 1<<lgwin < size {
+		lgwin++
+	}
+	return lgwin
+}
+
 func brotliBytes(data []byte) ([]byte, error) {
 	var buf bytes.Buffer
-	w := brotli.NewWriterLevel(&buf, brotli.BestCompression)
+	w := brotli.NewWriterOptions(&buf, brotli.WriterOptions{
+		Quality: brotli.BestCompression,
+		LGWin:   brotliWindow(len(data)),
+	})
 	if _, err := w.Write(data); err != nil {
 		return nil, err
 	}

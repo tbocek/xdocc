@@ -53,7 +53,15 @@ func main() {
 		flag.Usage()
 		os.Exit(2)
 	}
-	log.SetFlags(0)
+	// A command says what it did and is read as it runs, so the time is the
+	// time on the terminal. A service is read hours later out of a log, where
+	// the only way to tell a build that came late from an upload that did is
+	// to know when each line was written.
+	if *watch {
+		log.SetFlags(log.LstdFlags)
+	} else {
+		log.SetFlags(0)
+	}
 
 	site, err := xdocc.NewSite(*source, *output)
 	if err != nil {
