@@ -2,9 +2,23 @@
 	admin off
 	auto_https off
 	order webdav before file_server
+	servers {
+		# :8080 isn't published; only the outer caddy on the docker network
+		# reaches it. Trusting it makes client_ip read X-Forwarded-For.
+		trusted_proxies static private_ranges
+	}
 }
 
 :8080 {
+	# TLS ends at the outer proxy, but response headers ride through unchanged
+	header {
+		Strict-Transport-Security "max-age=31536000; includeSubDomains; preload"
+		X-Content-Type-Options "nosniff"
+		X-Frame-Options "DENY"
+		Referrer-Policy "strict-origin-when-cross-origin"
+		-Server
+	}
+
 	handle /dav {
 		redir * /dav/
 	}
@@ -23,11 +37,6 @@
 		root * /srv/www
 
 		header Vary Accept
-		# file_server sends no Cache-Control, and a browser with none of its
-		# own guesses: roughly a tenth of the file's age, so a page untouched
-		# for a week is held for hours and an edit does not show up.
-		# "no-cache" is revalidate, not do-not-store - the ETag turns the check
-		# into a 304 and the bytes are only sent when they really changed.
 		header Cache-Control "no-cache"
 
 		@markdown header Accept *text/markdown*
@@ -38,6 +47,18 @@
 			rewrite @dir {path}index.md
 			try_files {path} {http.request.orig_uri.path}
 		}
+
+		# dotfiles never leave the file server
+		@dotfiles path */.*
+		respond @dotfiles "Not found" 404
+
+		# /files only from the OST networks. client_ip, not remote_ip:
+		# remote_ip here is always the outer proxy.
+		@files_denied {
+			path */files*
+			not client_ip 146.136.0.0/16 152.96.0.0/16 172.16.0.0/16
+		}
+		respond @files_denied "Access denied" 403
 
 		# serves the .gz and .br xdocc already wrote instead of compressing again
 		file_server {
