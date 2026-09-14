@@ -45,7 +45,6 @@ configs:
     file: ./Caddyfile
     name: xdocc-caddyfile-v16
 
-
 secrets:
   DSL_WEBDAV_USER:
     external: true
