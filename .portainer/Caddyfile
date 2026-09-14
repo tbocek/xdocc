@@ -56,7 +56,7 @@
 		# remote_ip here is always the outer proxy.
 		@files_denied {
 			path */files*
-			not client_ip 146.136.0.0/16 152.96.0.0/16 172.16.0.0/16
+			not client_ip {$DSL_IP_INTERN:127.0.0.1/32}
 		}
 		respond @files_denied "Access denied" 403
 

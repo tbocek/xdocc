@@ -22,6 +22,7 @@ services:
     secrets:
       - DSL_WEBDAV_USER
       - DSL_WEBDAV_HASH
+      - DSL_IP_INTERN
     configs:
       - source: caddyfile
         target: /etc/caddy/Caddyfile
@@ -49,4 +50,6 @@ secrets:
   DSL_WEBDAV_USER:
     external: true
   DSL_WEBDAV_HASH:
+    external: true
+  DSL_IP_INTERN:
     external: true
